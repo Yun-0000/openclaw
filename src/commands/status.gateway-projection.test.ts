@@ -75,13 +75,14 @@ afterEach(() => {
 });
 
 it.each([
-  { withProjection: false, remote: false, readinessElapsedMs: 0 },
-  { withProjection: true, remote: false, readinessElapsedMs: 0 },
-  { withProjection: true, remote: true, readinessElapsedMs: 0 },
-  { withProjection: true, remote: false, readinessElapsedMs: 22_000 },
+  { withProjection: false, remote: false, readinessElapsedMs: 0, withChannelSummary: false },
+  { withProjection: true, remote: false, readinessElapsedMs: 0, withChannelSummary: false },
+  { withProjection: true, remote: true, readinessElapsedMs: 0, withChannelSummary: false },
+  { withProjection: true, remote: false, readinessElapsedMs: 22_000, withChannelSummary: false },
+  { withProjection: true, remote: false, readinessElapsedMs: 0, withChannelSummary: true },
 ])(
-  "serves online fleet JSON without local discovery ($withProjection, remote: $remote, startup: $readinessElapsedMs)",
-  async ({ withProjection, remote, readinessElapsedMs }) => {
+  "serves online fleet JSON without local discovery ($withProjection, remote: $remote, startup: $readinessElapsedMs, channels: $withChannelSummary)",
+  async ({ withProjection, remote, readinessElapsedMs, withChannelSummary }) => {
     await withOpenClawTestState(
       { layout: "split", prefix: "status-gateway-projection-" },
       async (state) => {
@@ -116,7 +117,7 @@ it.each([
               }
             : {}),
           heartbeat: { defaultAgentId: "alpha", agents: [] },
-          channelSummary: [],
+          channelSummary: withChannelSummary ? ["Telegram: configured"] : [],
           queuedSystemEvents: [],
           tasks: createEmptyTaskRegistrySummary(),
           taskAudit: createEmptyTaskAuditSummary(),
@@ -176,14 +177,12 @@ it.each([
         expect(result.agentStatus.ownership).toBe(withProjection ? "explicit" : null);
         expect(result.cfg.update?.channel).toBe(withProjection && !remote ? "beta" : undefined);
         expect(result.agentStatus.agents[0]?.name).toBe(withProjection ? "Alpha" : undefined);
-        expect(result.summary.channelSummary).toEqual([]);
-        expect(result.collection?.notCollected).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({
-              fields: ["channelSummary"],
-              reason: expect.stringContaining("openclaw channels status"),
-            }),
-          ]),
+        expect(
+          result.collection?.notCollected.filter((entry) =>
+            entry.fields.includes("channelSummary"),
+          ),
+        ).toEqual(
+          withChannelSummary ? [] : [expect.objectContaining({ fields: ["channelSummary"] })],
         );
         expect(mocks.callGateway).toHaveBeenCalledWith(
           expect.objectContaining({
@@ -215,19 +214,14 @@ it("marks channelSummary uncollected when Gateway status projection fails", asyn
 
       expect(result.gatewayReachable).toBe(true);
       expect(result.summary.channelSummary).toEqual([]);
-      expect(result.collection?.notCollected).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            fields: expect.arrayContaining(["channelSummary", "sessions"]),
-            reason: "status rpc failed",
-          }),
-        ]),
-      );
       expect(
-        result.collection?.notCollected.some(
-          (entry) => entry.fields.length === 1 && entry.fields[0] === "channelSummary",
-        ),
-      ).toBe(false);
+        result.collection?.notCollected.filter((entry) => entry.fields.includes("channelSummary")),
+      ).toEqual([
+        expect.objectContaining({
+          fields: expect.arrayContaining(["sessions"]),
+          reason: "status rpc failed",
+        }),
+      ]);
     },
   );
 });
