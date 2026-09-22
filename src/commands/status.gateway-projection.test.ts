@@ -176,7 +176,15 @@ it.each([
         expect(result.agentStatus.ownership).toBe(withProjection ? "explicit" : null);
         expect(result.cfg.update?.channel).toBe(withProjection && !remote ? "beta" : undefined);
         expect(result.agentStatus.agents[0]?.name).toBe(withProjection ? "Alpha" : undefined);
-        expect(result.collection?.notCollected.length).toBeGreaterThan(0);
+        expect(result.summary.channelSummary).toEqual([]);
+        expect(result.collection?.notCollected).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              fields: ["channelSummary"],
+              reason: expect.stringContaining("openclaw channels status"),
+            }),
+          ]),
+        );
         expect(mocks.callGateway).toHaveBeenCalledWith(
           expect.objectContaining({
             method: "status",
@@ -188,6 +196,41 @@ it.each([
     );
   },
 );
+
+it("marks channelSummary uncollected when Gateway status projection fails", async () => {
+  await withOpenClawTestState(
+    { layout: "split", prefix: "status-gateway-projection-failed-" },
+    async (state) => {
+      await state.writeConfig({
+        gateway: { mode: "local", auth: { mode: "none" } },
+        plugins: { enabled: false },
+      });
+      mocks.callGateway.mockRejectedValue(new Error("status rpc failed"));
+
+      const result = await scanStatusJsonFast(createStatusGatewayProbeBudget(), {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      });
+
+      expect(result.gatewayReachable).toBe(true);
+      expect(result.summary.channelSummary).toEqual([]);
+      expect(result.collection?.notCollected).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            fields: expect.arrayContaining(["channelSummary", "sessions"]),
+            reason: "status rpc failed",
+          }),
+        ]),
+      );
+      expect(
+        result.collection?.notCollected.some(
+          (entry) => entry.fields.length === 1 && entry.fields[0] === "channelSummary",
+        ),
+      ).toBe(false);
+    },
+  );
+});
 
 it("keeps offline config diagnostics and local collection", async () => {
   await withOpenClawTestState(
