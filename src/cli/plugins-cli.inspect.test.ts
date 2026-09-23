@@ -562,11 +562,9 @@ describe("plugins cli inspect", () => {
       }
       await runPluginsCommand(["plugins", "inspect", "--all", "--json", ...runtimeArgs]);
       expect(JSON.parse(pluginsCliRuntimeLogs.at(-1) ?? "null")).toEqual(
-        reports.map(({ plugin }) => ({
-          plugin,
-          install,
-          ...(runtime ? { inspectionScope: "cli" } : {}),
-        })),
+        reports.map(({ plugin }) =>
+          runtime ? { plugin, install, inspectionScope: "cli" as const } : { plugin, install },
+        ),
       );
     },
   );
