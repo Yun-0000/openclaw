@@ -1,9 +1,19 @@
+import { isAbortError, racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { formatErrorMessageForDisplay } from "../../infra/error-diagnostics.js";
 import { isCliSessionInvalidatingFailoverReason } from "../cli-session.js";
 import type { EmbeddedAgentRunResult } from "../embedded-agent-runner.js";
 import { type FailoverError, isFailoverError } from "../failover-error.js";
 import { cliBackendLog } from "./log.js";
 import type { CliReusableSession, PreparedCliRunContext } from "./types.js";
+
+/**
+ * Claude Code emits this before the turn starts, while another process holds
+ * `~/.claude/.oauth_refresh.lock`. One wait-and-retry keeps the same session
+ * and model. A second hit is terminal, so the caller can still fail over.
+ */
+const NATIVE_CLI_REFRESH_CONTENTION_RETRY_MS = 60_000;
+const NATIVE_CLI_REFRESH_CONTENTION_RE =
+  /failed to refresh oauth token: another claude code process is refreshing it or exited mid-refresh/i;
 
 export type CliRecoveryOptions = {
   timeoutMs?: number;
@@ -54,6 +64,24 @@ function shouldRetryFreshCliSessionAfterFailover(params: {
 
 function shouldRetryForkedCliSessionAfterFailover(error: FailoverError): boolean {
   return error.reason === "timeout" && error.code === "cli_no_output_timeout";
+}
+
+function isNativeCliRefreshContention(error: unknown): error is FailoverError {
+  return isFailoverError(error) && NATIVE_CLI_REFRESH_CONTENTION_RE.test(error.message);
+}
+
+async function waitForCliRecoveryDelay(waitMs: number, signal?: AbortSignal): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const elapsed = new Promise<void>((resolve) => {
+    timer = setTimeout(resolve, waitMs);
+  });
+  try {
+    await racePromiseWithAbortSignal(elapsed, signal);
+  } finally {
+    if (timer !== undefined) {
+      clearTimeout(timer);
+    }
+  }
 }
 
 /**
@@ -110,6 +138,46 @@ export async function runCliRecovery<TAttempt>(params: {
     }
     runParams.assertCurrent?.();
     let recoveryError = err;
+    if (isNativeCliRefreshContention(recoveryError)) {
+      const budgetBeforeWaitMs = remainingCliRecoveryBudgetMs(
+        runParams.timeoutMs,
+        context.startedMonotonicMs,
+      );
+      if (budgetBeforeWaitMs <= NATIVE_CLI_REFRESH_CONTENTION_RETRY_MS) {
+        return await failTerminal(recoveryError);
+      }
+      await waitForCliRecoveryDelay(NATIVE_CLI_REFRESH_CONTENTION_RETRY_MS, runParams.abortSignal);
+      runParams.assertCurrent?.();
+      try {
+        const retryTimeoutMs = remainingCliRecoveryBudgetMs(
+          runParams.timeoutMs,
+          context.startedMonotonicMs,
+        );
+        if (retryTimeoutMs <= 0) {
+          throw recoveryError;
+        }
+        cliBackendLog.warn(
+          `cli refresh contention retry: provider=${runParams.provider} model=${context.modelId} runId=${runParams.runId}`,
+        );
+        return await params.finishAttempt(
+          await params.executeAttempt(reusableCliSessionId, { timeoutMs: retryTimeoutMs }),
+          reusableCliSessionId,
+        );
+      } catch (retryErr) {
+        const deliveredRetryFailure = await params.finishDeliveredFailure(retryErr);
+        if (deliveredRetryFailure) {
+          return deliveredRetryFailure;
+        }
+        runParams.assertCurrent?.();
+        if (isAbortError(retryErr)) {
+          throw retryErr;
+        }
+        if (isNativeCliRefreshContention(retryErr)) {
+          return await failTerminal(retryErr);
+        }
+        recoveryError = retryErr;
+      }
+    }
     if (isFailoverError(recoveryError)) {
       if (
         !runParams.forkCliSessionOnResume &&
