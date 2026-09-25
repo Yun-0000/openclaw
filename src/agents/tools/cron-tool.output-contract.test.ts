@@ -4,6 +4,7 @@ import { Value } from "typebox/value";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { typeCheckSources } from "../../../test/helpers/typescript.js";
 import { clearCronJobActive, markCronJobActive } from "../../cron/active-jobs.js";
+import { cronJobReadView } from "../../cron/job-read-view.js";
 import { CronService } from "../../cron/service.js";
 import { createCronStoreHarness, createNoopLogger } from "../../cron/service.test-harness.js";
 import type { CronJob } from "../../cron/types.js";
@@ -162,6 +163,25 @@ describe("automations output contract", () => {
     const result = await tool.execute("call-contract", args);
     const schema = expectDefined(tool.outputSchema, "automations output schema");
     expect(Value.Errors(schema, result.details)).toEqual([]);
+  });
+
+  it("keeps get and update usable when a job has schedule computation errors", async () => {
+    const stored = {
+      ...job,
+      state: { nextRunAtMs: 1_800_000_060_000, scheduleErrorCount: 2 },
+    };
+    const reply = cronJobReadView(stored);
+    const tool = createCronTool(undefined, { callGatewayTool: vi.fn().mockResolvedValue(reply) });
+    const schema = expectDefined(tool.outputSchema, "automations output schema");
+    for (const args of [
+      { action: "get" as const, jobId: job.id },
+      { action: "update" as const, jobId: job.id, job: { name: "Check invoices" } },
+    ]) {
+      const result = await tool.execute("call-schedule-error", args);
+      expect(Value.Errors(schema, result.details)).toEqual([]);
+    }
+    expect(reply.state).not.toHaveProperty("scheduleErrorCount");
+    expect(stored.state.scheduleErrorCount).toBe(2);
   });
 
   it.each(["isolated", "current"] as const)(
