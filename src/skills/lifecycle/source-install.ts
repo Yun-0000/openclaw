@@ -116,14 +116,15 @@ async function rejectUndiscoverableSkillSource(params: {
     return { ok: false, error: `Skill path not found: ${params.sourceDir}` };
   }
   const diagnostics: LocalSkillLoadDiagnostic[] = [];
-  // Discovery owns whether a root SKILL.md can load. Install must fail before
-  // copying when that same read would later skip the skill.
+  // Discovery owns the content rules. Install copies source bytes into a new
+  // file, so a hardlinked SKILL.md does not remain a hardlink after install.
+  // Rejecting that source link here would fail a skill the staged copy can load.
   const loaded = loadSingleSkillDirectory({
     skillDir: rootRealPath,
     rootRealPath,
     source: "source-install",
     maxBytes: resolveSkillDiscoveryLimits(params.config).maxSkillFileBytes,
-    rejectHardlinks: true,
+    rejectHardlinks: false,
     onDiagnostic: (diagnostic) => {
       diagnostics.push(diagnostic);
     },

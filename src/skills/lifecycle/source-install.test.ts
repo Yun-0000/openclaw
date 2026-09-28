@@ -208,6 +208,34 @@ describe("installSkillFromSource", () => {
     });
   });
 
+  it("installs a valid SKILL.md that is hardlinked to another file", async () => {
+    await withTestDir({ prefix: "openclaw-skill-source-hardlink-" }, async (root) => {
+      const workspaceDir = path.join(root, "workspace");
+      const sourceDir = path.join(root, "source");
+      await writeSkill(sourceDir, { name: "linked-skill" });
+      const sourceSkill = path.join(sourceDir, "SKILL.md");
+      const alias = path.join(root, "linked-alias.md");
+      await fs.link(sourceSkill, alias);
+
+      const result = await installSkillFromSource({
+        workspaceDir,
+        spec: sourceDir,
+      });
+
+      expect(result).toMatchObject({
+        ok: true,
+        slug: "linked-skill",
+        source: "path",
+        targetDir: path.join(workspaceDir, "skills", "linked-skill"),
+      });
+      const installed = path.join(workspaceDir, "skills", "linked-skill", "SKILL.md");
+      const [installedStat, aliasStat] = await Promise.all([fs.lstat(installed), fs.lstat(alias)]);
+      expect(installedStat.nlink).toBe(1);
+      expect(installedStat.ino).not.toBe(aliasStat.ino);
+      await expect(fs.readFile(installed, "utf8")).resolves.toContain("linked-skill");
+    });
+  });
+
   it.each(["regular", "hardlink", "frontmatter"])(
     "resolves source-installed skill keys with %s metadata",
     async (kind) => {
