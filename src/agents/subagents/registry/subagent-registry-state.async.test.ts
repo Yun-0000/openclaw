@@ -1,4 +1,6 @@
 // Real-storage proof that committed and best-effort publications survive read-owner retirement.
+import { AsyncLocalStorage } from "node:async_hooks";
+import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { readSqliteUserVersion } from "../../../infra/sqlite-user-version.js";
 import { AsyncWorkScope } from "../../../shared/async-work-scope.js";
@@ -10,8 +12,10 @@ import {
 } from "../../../state/openclaw-state-db-cache.js";
 import * as databaseCache from "../../../state/openclaw-state-db-cache.js";
 import * as stateReads from "../../../state/openclaw-state-db-readonly.js";
+import { withExistingOpenClawStateSchema } from "../../../state/openclaw-state-db-schema-policy.js";
 import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
+import { withEnvAsync } from "../../../test-utils/env.js";
 import {
   createOpenClawTestState,
   withOpenClawTestState,
@@ -21,6 +25,8 @@ import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpe
 import { buildControlledSubagentRunsReadContext } from "./subagent-control-scope.js";
 import {
   clearSubagentRunsReadCacheForTest,
+  createSubagentSessionListReadView,
+  getSubagentRunsSnapshotForChildSession,
   getSubagentRunsSnapshotForRead,
   getSubagentMaintenanceRunsSnapshotForRead,
   getSubagentSessionListRunsSnapshotForRead,
@@ -60,6 +66,69 @@ function runs(model: string, runId = "one") {
   return new Map([[run.runId, run]]);
 }
 
+it("reads resident session-list facts without enumerating the process environment", () => {
+  persistSubagentRunsToDiskOrThrow(runs("retained"));
+  const prepared = createSubagentSessionListReadView({ env: state.env });
+  const preparedIdentity = prepared.snapshotIdentity();
+  const originalEnv = process.env;
+  let enumerations = 0;
+  let identity: object | undefined;
+  let model: string | undefined;
+  process.env = new Proxy(originalEnv, {
+    ownKeys(target) {
+      enumerations++;
+      return Reflect.ownKeys(target);
+    },
+  });
+  try {
+    identity = getSubagentSessionListReadSnapshotIdentity();
+    model = getSubagentSessionListRunsSnapshotForRead(new Map()).get("one")?.model;
+  } finally {
+    process.env = originalEnv;
+  }
+  expect(identity).toBeDefined();
+  expect(model).toBe("retained");
+  expect(enumerations).toBe(0);
+  const resolutions = vi.spyOn(path, "resolve");
+  let current: object | undefined;
+  for (let index = 0; index < 100; index++) {
+    current = prepared.snapshotIdentity();
+  }
+  expect(current).toBe(preparedIdentity);
+  expect(resolutions).not.toHaveBeenCalled();
+  resolutions.mockRestore();
+});
+
+it.each(["maintenance", "schema"] as const)(
+  "rejects resident session-list reads from an ended %s scope",
+  async (kind) => {
+    persistSubagentRunsToDiskOrThrow(runs("retained"));
+    const identity = getSubagentSessionListReadSnapshotIdentity();
+    const maintenance = createOpenClawDatabaseMaintenanceScope();
+    const bind = () => {
+      const prepared = createSubagentSessionListReadView({ env: state.env });
+      expect(prepared.snapshotIdentity()).toBe(identity);
+      return {
+        current: AsyncLocalStorage.bind(() => getSubagentSessionListRunsSnapshotForRead(new Map())),
+        prepared,
+      };
+    };
+    const read =
+      kind === "maintenance"
+        ? maintenance.run(bind)
+        : withExistingOpenClawStateSchema(
+            { path: captureOpenClawStateWorkerContext().admission.databasePath },
+            bind,
+          );
+    await maintenance.close();
+    const failure = kind === "maintenance" ? "scope is closed" : "admission has ended";
+    expect(read.current).toThrow(failure);
+    expect(read.prepared.runs).toThrow(failure);
+    await expect(read.prepared.prepare()).rejects.toThrow(failure);
+    expect(getSubagentSessionListReadSnapshotIdentity()).toBe(identity);
+  },
+);
+
 function holdFirstCompactRead(
   command = "subagents.sessionList",
   scopeKind?: "session",
@@ -90,6 +159,38 @@ function holdFirstCompactRead(
     });
   return { entered: entered.promise, release: release.resolve, read };
 }
+
+it("keeps a newer source publication when a prepared projection read settles", async () => {
+  store.saveSubagentRegistryToSqlite(runs("original"));
+  const prepared = createSubagentSessionListReadView({ env: state.env });
+  const other = await createOpenClawTestState({ scenario: "minimal", applyEnv: false });
+  const gate = holdFirstCompactRead();
+  const pending = prepared.prepare();
+  const outcome = pending.catch((error: unknown) => error);
+  let published: object | undefined;
+  try {
+    await gate.entered;
+    await withEnvAsync({ OPENCLAW_STATE_DIR: other.stateDir }, async () => {
+      persistSubagentRunsToDiskOrThrow(runs("newer source"));
+      published = getSubagentSessionListReadSnapshotIdentity();
+    });
+    expect(prepared.snapshotIdentity()).toBeUndefined();
+    gate.release();
+    expect(await outcome).toMatchObject({
+      message: "Subagent registry database changed during preparation",
+    });
+    await withEnvAsync({ OPENCLAW_STATE_DIR: other.stateDir }, async () => {
+      expect(getSubagentSessionListReadSnapshotIdentity()).toBe(published);
+      expect(getSubagentSessionListRunsSnapshotForRead(new Map()).get("one")?.model).toBe(
+        "newer source",
+      );
+    });
+  } finally {
+    gate.release();
+    await outcome;
+    await other.cleanup();
+  }
+});
 
 it.each(["cancel", "query failure", "cleanup failure"] as const)(
   "lets a current waiter recover only a clean canceled fill (%s)",
@@ -154,42 +255,59 @@ it("prepares cold compact facts through the real read worker and keeps caller Ma
   expect(nativeLoad).not.toHaveBeenCalled();
 });
 
-it("hydrates only latest controlled payloads while counting descendants from compact facts", async () => {
-  const requesterSessionKey = "agent:main:parent";
-  const latest = createSubagentRunRecord({
-    runId: "latest",
-    childSessionKey: "agent:main:subagent:visible",
-    requesterSessionKey,
-    generation: 2,
-    createdAt: Date.now(),
-    completion: { required: false },
-    delivery: { status: "not_required" },
-  });
-  const old = { ...latest, runId: "old", generation: 1, task: "retained historical payload" };
-  const descendant = createSubagentRunRecord({
-    runId: "descendant",
-    childSessionKey: "agent:main:subagent:descendant",
-    requesterSessionKey: latest.childSessionKey,
-    createdAt: Date.now(),
-    completion: { required: false },
-    delivery: { status: "not_required" },
-  });
-  store.saveSubagentRegistryToSqlite(
-    new Map([old, latest, descendant].map((entry) => [entry.runId, entry])),
-  );
-  const nativeLoad = vi.spyOn(store, "loadSubagentRegistryFromSqlite");
-  const read = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
+it.each(["requester", "controller"] as const)(
+  "hydrates latest controlled payloads with %s descendant topology",
+  async (owner) => {
+    const requesterSessionKey = "agent:main:parent";
+    const latest = createSubagentRunRecord({
+      runId: "latest",
+      childSessionKey: "agent:main:subagent:visible",
+      requesterSessionKey,
+      generation: 2,
+      createdAt: Date.now(),
+      completion: { required: false },
+      delivery: { status: "not_required" },
+    });
+    const old = { ...latest, runId: "old", generation: 1, task: "retained historical payload" };
+    const descendant = createSubagentRunRecord({
+      runId: "descendant",
+      childSessionKey: "agent:main:subagent:descendant",
+      requesterSessionKey: owner === "requester" ? latest.childSessionKey : "agent:main:other",
+      controllerSessionKey: latest.childSessionKey,
+      createdAt: Date.now(),
+      completion: { required: false },
+      delivery: { status: "not_required" },
+    });
+    store.saveSubagentRegistryToSqlite(
+      new Map([old, latest, descendant].map((entry) => [entry.runId, entry])),
+    );
+    const nativeLoad = vi.spyOn(store, "loadSubagentRegistryFromSqlite");
+    const read = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
 
-  const context = await buildControlledSubagentRunsReadContext(requesterSessionKey);
+    const context = await buildControlledSubagentRunsReadContext(requesterSessionKey);
 
-  expect(context.runs.map((entry) => entry.runId)).toEqual([latest.runId]);
-  expect(context.list.pendingDescendants.get(latest.childSessionKey)).toBe(1);
-  expect(read.mock.calls.map(([, command]) => command)).toEqual([
-    { type: "subagents.sessionList" },
-    { type: "subagents.runs", scope: { kind: "ids", runIds: [latest.runId] } },
-  ]);
-  expect(nativeLoad).not.toHaveBeenCalled();
-});
+    expect(context.runs.map((entry) => entry.runId)).toEqual([latest.runId]);
+    expect(context.list.pendingDescendants.get(latest.childSessionKey)).toBe(
+      owner === "requester" ? 1 : 0,
+    );
+    expect(context.list.childSessionsByController.get(latest.childSessionKey)).toEqual([
+      descendant.childSessionKey,
+    ]);
+    expect(read.mock.calls.map(([, command]) => command)).toEqual([
+      { type: "subagents.sessionList" },
+      { type: "subagents.runs", scope: { kind: "ids", runIds: [latest.runId] } },
+    ]);
+    expect(nativeLoad).not.toHaveBeenCalled();
+    const moved = {
+      ...latest,
+      runId: "moved",
+      generation: 3,
+      requesterSessionKey: "agent:main:moved",
+    };
+    persistSubagentRunsToDiskOrThrow(new Map([[moved.runId, moved]]), [moved.runId]);
+    expect((await buildControlledSubagentRunsReadContext(requesterSessionKey)).runs).toEqual([]);
+  },
+);
 
 it("reselects a durable controlled generation that replaced a cached physical row", async () => {
   const previous = runs("previous", "previous").get("previous")!;
@@ -261,6 +379,7 @@ it.each(
           sessionKeys: [],
         }),
         (selection, snapshot) => selection.runIds.map((id) => snapshot.get(id)),
+        { sessionKeys: [childSessionKey], descendants: true },
       );
     const first =
       reader === "child session"
@@ -586,6 +705,7 @@ it("does not install private snapshot bytes into canonical compact facts", async
       new Map(),
       (snapshot) => ({ snapshot, runIds: [...snapshot.keys()], sessionKeys: [] }),
       ({ snapshot }) => snapshot,
+      "all",
     );
     expect(privateRows.get("one")?.model).toBe("snapshot");
     expect(getSubagentSessionListReadSnapshotIdentity()).toBeUndefined();
@@ -690,6 +810,12 @@ it.each(["best effort", "strict refusal", "strict commit", "atomic commit"])(
       const committed = mode === "strict commit" || mode === "atomic commit";
       expect(store.readSubagentRun(database, "one")?.model).toBe(committed ? "after" : "before");
       const refused = mode === "strict refusal";
+      expect(
+        getSubagentRunsSnapshotForChildSession(new Map(), entry.childSessionKey).get("one"),
+      ).toMatchObject({
+        model: refused ? "before" : "after",
+        execution: { status: refused ? "running" : "terminal" },
+      });
       expect(getSubagentRunsSnapshotForRead(new Map()).get("one")).toMatchObject({
         model: refused ? "before" : "after",
         execution: { status: refused ? "running" : "terminal" },
@@ -712,6 +838,52 @@ it.each(["best effort", "strict refusal", "strict commit", "atomic commit"])(
     expect(getSubagentSessionListRunsSnapshotForRead(new Map()).get("one")?.model).toBe("reopened");
   },
 );
+
+it("keeps retired publications with their draining source across source switches and reopen", async () => {
+  const selectedChild = () =>
+    getSubagentRunsSnapshotForChildSession(new Map(), "agent:main:subagent:one");
+  persistSubagentRunsToDiskOrThrow(runs("before"), ["one"]);
+  expect(getSubagentRunsSnapshotForRead(new Map()).get("one")?.model).toBe("before");
+  const context = captureOpenClawStateWorkerContext();
+  const other = await createOpenClawTestState({ scenario: "minimal", applyEnv: false });
+  let releaseClose = createDeferredCore();
+  const unregister = registerOpenClawStateDatabaseAsyncResource({
+    close: () => releaseClose.promise,
+  });
+  let closing = closeOpenClawStateDatabaseByPathAsync(context.admission.databasePath);
+  try {
+    persistSubagentRunsToDiskOrThrow(runs("after"), ["one"]);
+    expect(selectedChild().get("one")?.model).toBe("after");
+    expect(getSubagentRunsSnapshotForRead(new Map()).get("one")?.model).toBe("after");
+    await withEnvAsync({ OPENCLAW_STATE_DIR: other.stateDir }, async () => {
+      expect(selectedChild().has("one")).toBe(false);
+      expect(getSubagentRunsSnapshotForRead(new Map()).has("one")).toBe(false);
+      persistSubagentRunsToDiskOrThrow(runs("other"), ["one"]);
+    });
+    expect(selectedChild().has("one")).toBe(false);
+    expect(getSubagentRunsSnapshotForRead(new Map()).has("one")).toBe(false);
+    persistSubagentRunsToDiskOrThrow(runs("after"), ["one"]);
+    expect(selectedChild().get("one")?.model).toBe("after");
+    expect(getSubagentRunsSnapshotForRead(new Map()).get("one")?.model).toBe("after");
+    releaseClose.resolve();
+    await closing;
+
+    store.saveSubagentRegistryChangesToSqlite(runs("reopened"), ["one"]);
+    releaseClose = createDeferredCore();
+    closing = closeOpenClawStateDatabaseByPathAsync(context.admission.databasePath);
+    expect(selectedChild().has("one")).toBe(false);
+    expect(getSubagentRunsSnapshotForRead(new Map()).has("one")).toBe(false);
+    releaseClose.resolve();
+    await closing;
+    expect(selectedChild().get("one")?.model).toBe("reopened");
+    expect(getSubagentRunsSnapshotForRead(new Map()).get("one")?.model).toBe("reopened");
+  } finally {
+    releaseClose.resolve();
+    await closing;
+    unregister();
+    await other.cleanup();
+  }
+});
 
 it("keeps unrelated publication context failures visible", () => {
   const failure = new Error("synthetic context failure");

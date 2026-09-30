@@ -1,4 +1,3 @@
-// Builds provider install catalog entries from plugin metadata.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
@@ -282,17 +281,7 @@ function resolveOfficialExternalProviderInstallCatalogEntries(params: {
           choiceId,
           choiceLabel,
           ...resolveProviderInstallCatalogChoiceFields({
-            choiceHint: choice.choiceHint,
-            modelTarget: choice.modelTarget,
-            assistantPriority: choice.assistantPriority,
-            assistantVisibility: choice.assistantVisibility,
-            groupId: choice.groupId,
-            groupLabel: choice.groupLabel,
-            groupHint: choice.groupHint,
-            optionKey: choice.optionKey,
-            cliFlag: choice.cliFlag,
-            cliOption: choice.cliOption,
-            cliDescription: choice.cliDescription,
+            ...choice,
             onboardingScopes: normalizeProviderAuthChoiceScopes(choice.onboardingScopes),
           }),
           ...(choice.deprecatedChoiceIds?.length

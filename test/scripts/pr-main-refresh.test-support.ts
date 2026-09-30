@@ -12,6 +12,7 @@ import { delimiter, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { createPrivateHandoffStoreFixture } from "./pr-private-handoff.test-support.js";
 import { copyPrWrapperSources, linkPrWrapperDependencies } from "./pr-wrapper.test-support.js";
 
 const templateDirs = useAutoCleanupTempDirTracker(afterAll);
@@ -24,8 +25,10 @@ function shellQuote(value: string): string {
 function createFixtureGit(root: string) {
   const home = join(root, "home");
   mkdirSync(home);
+  const handoff = createPrivateHandoffStoreFixture(home);
   const env: NodeJS.ProcessEnv = {
-    PATH: process.env.PATH,
+    ...handoff.env,
+    PATH: handoff.env.PATH,
     HOME: home,
     TMPDIR: root,
     GIT_CONFIG_GLOBAL: "/dev/null",
@@ -45,7 +48,7 @@ function createFixtureGit(root: string) {
     }
     return result.stdout.trim();
   }
-  return { env, realGit, git };
+  return { env, realGit, git, handoff };
 }
 
 function createMainRefreshTemplate(directory: string, perWorktreeConfig: boolean) {
@@ -125,7 +128,8 @@ export function createMainRefreshFixture(
   const worktree = join(canonical, ".worktrees", "pr-42");
   const bin = join(root, "bin");
   mkdirSync(bin);
-  const { env, realGit, git } = createFixtureGit(root);
+  const { env, realGit, git, handoff } = createFixtureGit(root);
+  const privateNodeOptions = env.NODE_OPTIONS;
   const { main, head, sameTreeHead, movedMain, gateMain } = template;
   const copyOptions = { recursive: true, mode: fsConstants.COPYFILE_FICLONE };
   cpSync(template.origin, origin, copyOptions);
@@ -248,8 +252,9 @@ export function createMainRefreshFixture(
     authorPermission: "write",
     failFetch: false,
     failPrFetch: false,
-    prIdentityDriftAfterFetch: "" as "" | "oid" | "branch" | "repository",
-    wrongPrFetch: false,
+    unsupportedNoLazy: false,
+    prIdentityDriftAfterAcquisition: "" as "" | "oid" | "branch" | "repository",
+    wrongPrAcquisition: false,
     failDetach: false,
     failFetchAt: 0,
     pauseFetchAt: 0,
@@ -317,10 +322,13 @@ function runGit(args, input) {
     prelude +
       `
 event({ kind: 'git-runtime', args });
+if (control.unsupportedNoLazy && args[0] === '--no-lazy-fetch') process.exit(129);
 const prFetch = args.includes('fetch') && args.some(arg =>
   arg.startsWith('pull/42/head') ||
   arg.replace(/^\\+/, '').split(':')[0] === control.metadata.headRefOid
 );
+const reusedPrHead = args[0] === 'branch' && args[1] === '--force' &&
+  args[2] === '--no-track' && args.at(-1) === control.metadata.headRefOid;
 if ((control.failPrFetch && prFetch) ||
     (control.failDetach && args[0] === 'checkout' && args[1] === '--detach')) {
   console.error('fatal: injected prepare handoff failure');
@@ -355,21 +363,21 @@ if (args.includes('push')) {
   event({ kind: 'leased-cleanup', args });
 }
 const result = spawnSync(git, args, { stdio: 'inherit' });
-if (prFetch && result.status === 0) {
-  const prefix = args.slice(0, args.indexOf('fetch'));
-  const destination = args.at(-1).split(':')[1];
-  if (control.wrongPrFetch && destination) {
+if ((prFetch || reusedPrHead) && result.status === 0) {
+  const prefix = prFetch ? args.slice(0, args.indexOf('fetch')) : [];
+  const destination = prFetch ? args.at(-1).split(':')[1] : 'refs/heads/' + args.at(-2);
+  if (control.wrongPrAcquisition && destination) {
     runGit([...prefix, 'update-ref', destination.startsWith('refs/') ? destination : 'refs/heads/' + destination,
       ${JSON.stringify(sameTreeHead)}]);
   }
-  if (control.prIdentityDriftAfterFetch === 'oid') {
+  if (control.prIdentityDriftAfterAcquisition === 'oid') {
     control.metadata.headRefOid = ${JSON.stringify(sameTreeHead)};
-  } else if (control.prIdentityDriftAfterFetch === 'branch') {
+  } else if (control.prIdentityDriftAfterAcquisition === 'branch') {
     control.metadata.headRefName = 'renamed';
-  } else if (control.prIdentityDriftAfterFetch === 'repository') {
+  } else if (control.prIdentityDriftAfterAcquisition === 'repository') {
     control.metadata.headRepository.nameWithOwner = 'fixture/replacement';
   }
-  if (control.prIdentityDriftAfterFetch) writeFileSync(controlFile, JSON.stringify(control));
+  if (control.prIdentityDriftAfterAcquisition) writeFileSync(controlFile, JSON.stringify(control));
 }
 if (mainFetch && result.status === 0) {
   const prefix = args.slice(0, args.indexOf('fetch'));
@@ -400,9 +408,10 @@ process.exit(result.status ?? 1);
     `#!/bin/sh
 instrument=false
 decision=false
+case "$*" in 'branch --force --no-track '*) instrument=true ;; esac
 for arg in "$@"; do
   case "$arg" in
-    fetch|checkout|push) instrument=true ;;
+    fetch|checkout|push|--no-lazy-fetch) instrument=true ;;
     merge-base|diff|update-ref) decision=true ;;
   esac
 done
@@ -748,6 +757,7 @@ if (process.argv[1]?.endsWith('/watch-pr-ci.mts')) {
     gateMain,
     env,
     git,
+    assertPrivateHandoffVerified: () => handoff.assertProvisionersInjected(),
     metadata,
     seedPreparedMerge() {
       // Merge-only cases need prepared inputs, not another prepare/gates/push run.
@@ -770,11 +780,10 @@ if (process.argv[1]?.endsWith('/watch-pr-ci.mts')) {
     },
     configure(update: Partial<typeof control>) {
       Object.assign(control, update);
-      if (control.hostedCi === "scheduled") {
-        delete env.NODE_OPTIONS;
-      } else {
-        env.NODE_OPTIONS = `--import=${clock}`;
-      }
+      env.NODE_OPTIONS =
+        control.hostedCi === "scheduled"
+          ? privateNodeOptions
+          : `${privateNodeOptions} --import=${pathToFileURL(clock).href}`;
       writeFileSync(controlFile, JSON.stringify(control));
     },
     events() {

@@ -193,8 +193,8 @@ describe("subscribeEmbeddedAgentSession", () => {
     expect(onBlockReply).not.toHaveBeenCalled();
   });
 
-  it("suppresses the automatic final after a confirmed current-source thread reply", async () => {
-    const { emit, onBlockReply } = createBlockReplyHarness("message_end", {
+  it("preserves a distinct automatic final after confirmed current-source thread delivery", async () => {
+    const { emit, onBlockReply, subscription } = createBlockReplyHarness("message_end", {
       sourceReplyDeliveryMode: "automatic",
     });
 
@@ -215,9 +215,12 @@ describe("subscribeEmbeddedAgentSession", () => {
       },
     });
     emitAssistantMessageEnd(emit, "QA-THREAD-RECEIPT-FINAL-OK");
-    await Promise.resolve();
+    await subscription.waitForPendingEvents();
 
-    expect(onBlockReply).not.toHaveBeenCalled();
+    expect(subscription.getSourceReplyDeliveryState()).toBe("delivered");
+    expect(onBlockReply.mock.calls.map(([payload]) => payload.text)).toEqual([
+      "QA-THREAD-RECEIPT-FINAL-OK",
+    ]);
   });
 
   it("reports bridged message-tool-only source delivery to the attempt", async () => {
@@ -476,18 +479,33 @@ describe("subscribeEmbeddedAgentSession", () => {
 
   it("tracks media-only message tool sends as messaging delivery", async () => {
     const { emit, subscription } = createBlockReplyHarness("message_end");
+    try {
+      await emitMessageToolLifecycle({
+        emit,
+        toolCallId: "tool-message-media",
+        message: "",
+        media: "file:///tmp/render.mp4",
+        result: { details: { deliveryStatus: "sent" } },
+      });
+      await subscription.waitForPendingEvents();
 
-    await emitMessageToolLifecycle({
-      emit,
-      toolCallId: "tool-message-media",
-      message: "",
-      media: "file:///tmp/render.mp4",
-      result: { details: { deliveryStatus: "sent" } },
-    });
-    await Promise.resolve();
+      expect(subscription.didSendViaMessagingTool()).toBe(true);
+      expect(subscription.getMessagingToolSentMediaUrls()).toEqual(["file:///tmp/render.mp4"]);
 
-    expect(subscription.didSendViaMessagingTool()).toBe(true);
-    expect(subscription.getMessagingToolSentMediaUrls()).toEqual(["file:///tmp/render.mp4"]);
+      const expectedUrls = Array.from({ length: 200 }, (_, index) => `file:///img-${index}.jpg`);
+      await emitMessageToolLifecycle({
+        emit,
+        toolCallId: "tool-message-media-cap",
+        message: "",
+        result: { details: { deliveryStatus: "sent", mediaUrls: [...expectedUrls] } },
+      });
+      await subscription.waitForPendingEvents();
+
+      expect(subscription.getMessagingToolSentMediaUrls()).toEqual(expectedUrls);
+      expect(subscription.getMessagingToolSentMediaUrls()).not.toContain("file:///tmp/render.mp4");
+    } finally {
+      subscription.unsubscribe();
+    }
   });
 
   it("tracks internal-ui source replies for message-tool-only final payloads", async () => {

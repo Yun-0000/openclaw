@@ -10,7 +10,106 @@ export * from "./delivery-queue-runtime.js";
 export * from "../infra/backoff.js";
 export * from "../infra/channel-activity.js";
 export * from "../infra/dedupe.js";
-export type * from "../infra/diagnostic-events.js";
+// Preserve the deprecated type-query surface without exposing new diagnostics helpers.
+export type {
+  DiagnosticAsyncQueueDroppedEvent,
+  DiagnosticContextAssembledEvent,
+  DiagnosticEventInput,
+  DiagnosticEventMetadata,
+  DiagnosticEventPayload,
+  DiagnosticEventPrivateData,
+  DiagnosticExecApprovalFollowupSuppressedEvent,
+  DiagnosticExecProcessCompletedEvent,
+  DiagnosticFailoverEvent,
+  DiagnosticHarnessRunCompletedEvent,
+  DiagnosticHarnessRunErrorEvent,
+  DiagnosticHarnessRunOutcome,
+  DiagnosticHarnessRunPhase,
+  DiagnosticHarnessRunStartedEvent,
+  DiagnosticHeartbeatEvent,
+  DiagnosticLaneDequeueEvent,
+  DiagnosticLaneEnqueueEvent,
+  DiagnosticLivenessWarningEvent,
+  DiagnosticLivenessWarningReason,
+  DiagnosticLogRecordEvent,
+  DiagnosticMemoryPressureEvent,
+  DiagnosticMemorySampleEvent,
+  DiagnosticMemoryUsage,
+  DiagnosticMessageDeliveryCompletedEvent,
+  DiagnosticMessageDeliveryErrorEvent,
+  DiagnosticMessageDeliveryKind,
+  DiagnosticMessageDeliveryStartedEvent,
+  DiagnosticMessageDispatchCompletedEvent,
+  DiagnosticMessageDispatchStartedEvent,
+  DiagnosticMessageProcessedEvent,
+  DiagnosticMessageQueuedEvent,
+  DiagnosticMessageReceivedEvent,
+  DiagnosticModelCallCompletedEvent,
+  DiagnosticModelCallContent,
+  DiagnosticModelCallErrorEvent,
+  DiagnosticModelCallStartedEvent,
+  DiagnosticPayloadLargeEvent,
+  DiagnosticPhaseCompletedEvent,
+  DiagnosticPhaseDetails,
+  DiagnosticPhaseSnapshot,
+  DiagnosticRunAttemptEvent,
+  DiagnosticRunCompletedEvent,
+  DiagnosticRunProgressEvent,
+  DiagnosticRunStartedEvent,
+  DiagnosticSecurityEvent,
+  DiagnosticSecurityEventActor,
+  DiagnosticSecurityEventControl,
+  DiagnosticSecurityEventInput,
+  DiagnosticSecurityEventPolicy,
+  DiagnosticSecurityEventTarget,
+  DiagnosticSessionActiveWorkKind,
+  DiagnosticSessionAttentionClassification,
+  DiagnosticSessionLongRunningEvent,
+  DiagnosticSessionRecoveryCompletedEvent,
+  DiagnosticSessionRecoveryRequestedEvent,
+  DiagnosticSessionRecoveryStatus,
+  DiagnosticSessionStalledEvent,
+  DiagnosticSessionState,
+  DiagnosticSessionStateEvent,
+  DiagnosticSessionStuckEvent,
+  DiagnosticSessionTurnCreatedEvent,
+  DiagnosticSkillActivation,
+  DiagnosticSkillTelemetrySource,
+  DiagnosticSkillUsagePrivateData,
+  DiagnosticSkillUsedEvent,
+  DiagnosticTalkEvent,
+  DiagnosticTelemetryExporterEvent,
+  DiagnosticToolCallContent,
+  DiagnosticToolExecutionBlockedEvent,
+  DiagnosticToolExecutionCompletedEvent,
+  DiagnosticToolExecutionErrorEvent,
+  DiagnosticToolExecutionStartedEvent,
+  DiagnosticToolLoopEvent,
+  DiagnosticToolParamsSummary,
+  DiagnosticToolSource,
+  DiagnosticToolTerminalReason,
+  DiagnosticUsageEvent,
+  DiagnosticWebhookErrorEvent,
+  DiagnosticWebhookProcessedEvent,
+  DiagnosticWebhookReceivedEvent,
+  TrustedToolExecutionEvent,
+  emitDiagnosticEventWithTrustedTraceContext,
+  emitFailoverEvent,
+  emitInternalDiagnosticEvent,
+  emitTrustedDiagnosticEvent,
+  emitTrustedDiagnosticEventWithPrivateData,
+  emitTrustedSecurityEvent,
+  emitTrustedSkillUsedDiagnosticEvent,
+  getInternalDiagnosticEventSequence,
+  hasPendingInternalDiagnosticEvent,
+  isInternalDiagnosticEventMetadata,
+  onInternalDiagnosticEvent,
+  onTrustedInternalDiagnosticEvent,
+  onTrustedToolExecutionEvent,
+  resetDiagnosticEventsForTest,
+  setDiagnosticsEnabledForProcess,
+  waitForDiagnosticEventsDrained,
+} from "../infra/diagnostic-events.js";
 export {
   areDiagnosticsEnabledForProcess,
   emitDiagnosticEvent,
@@ -79,6 +178,8 @@ export * from "../infra/exec-approval-command-display.ts";
 export * from "../infra/exec-approval-channel-runtime.ts";
 export * from "../infra/exec-approval-reply.ts";
 export * from "../infra/exec-approval-session-target.ts";
+export { commandRequiresSecurityAuditSuppressionApproval } from "../infra/exec-approvals-policy.js";
+
 // Keep this deprecated barrel pinned to its shipped approval surface. Internal
 // store/locking exports must not become plugin contracts accidentally.
 export {
@@ -87,7 +188,6 @@ export {
   analyzeArgvCommand,
   analyzeWindowsShellCommand,
   buildEnforcedShellCommand,
-  commandRequiresSecurityAuditSuppressionApproval,
   DEFAULT_EXEC_APPROVAL_ASK_FALLBACK,
   DEFAULT_EXEC_APPROVAL_DECISIONS,
   DEFAULT_EXEC_APPROVAL_TIMEOUT_MS,
@@ -224,7 +324,14 @@ export {
   type RequestBodyLimitGuardOptions,
 } from "../infra/http-body.js";
 export * from "../infra/json-files.js";
-export * from "../infra/local-file-access.js";
+export {
+  assertNoWindowsNetworkPath,
+  basenameFromMediaSource,
+  hasEncodedFileUrlSeparator,
+  isWindowsNetworkPath,
+  safeFileURLToPath,
+  trySafeFileURLToPath,
+} from "@openclaw/fs-safe/advanced";
 export * from "../infra/map-size.js";
 export * from "../infra/net/hostname.ts";
 export {

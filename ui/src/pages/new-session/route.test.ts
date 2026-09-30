@@ -57,6 +57,44 @@ function createContext(params: {
 }
 
 describe("new-session route catalog target", () => {
+  it.each(["current", "failed"] as const)(
+    "does not resolve catalog routes from a warm roster after %s discovery",
+    async (outcome) => {
+      const warm: NonNullable<ApplicationContext["agents"]["state"]["agentsList"]> = {
+        defaultId: "old",
+        mainKey: "main",
+        scope: "per-sender",
+        agents: [{ id: "old" }],
+      };
+      const { context, agentsState, ensureList, request } = createContext({
+        assistantAgentId: "old",
+        agentsList: warm,
+      });
+      Object.assign(agentsState, { agentsListCached: true });
+      ensureList.mockImplementation(async () => {
+        if (outcome === "current") {
+          agentsState.agentsList = { ...warm, defaultId: "current", agents: [{ id: "current" }] };
+          Object.assign(agentsState, { agentsListCached: false });
+        }
+        return agentsState.agentsList;
+      });
+
+      const data = await loadNewSessionData(context, "?catalog=claude");
+      expect(ensureList).toHaveBeenCalledOnce();
+      if (outcome === "current") {
+        expect(data.agentId).toBe("current");
+        expect(request).toHaveBeenCalledWith("sessions.catalog.list", {
+          agentId: "current",
+          catalogId: "claude",
+          limitPerHost: 1,
+        });
+      } else {
+        expect(data.agentId).toBe("");
+        expect(request).not.toHaveBeenCalled();
+      }
+    },
+  );
+
   it("carries an explicit model into an unsent draft without creating a session", async () => {
     const { context, request } = createContext({ assistantAgentId: "main", agentsList: null });
     const data = await loadNewSessionData(
@@ -67,7 +105,6 @@ describe("new-session route catalog target", () => {
       agentId: "main",
       requestedAgentId: "main",
       requestedModel: "example/model-one",
-      model: "example/model-one",
       startTerminal: false,
       catalogId: "",
     });
@@ -86,7 +123,6 @@ describe("new-session route catalog target", () => {
       context,
       `?agent=main&model=${encodeURIComponent(model)}`,
     );
-    expect(data.model).toBe("");
     expect(data.requestedModel).toBeUndefined();
     expect(request).not.toHaveBeenCalled();
   });

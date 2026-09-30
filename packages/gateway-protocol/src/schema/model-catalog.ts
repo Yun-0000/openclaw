@@ -68,7 +68,11 @@ const ModelRuntimeProperties = {
   reasoning: Type.Optional(Type.Boolean()),
   thinkingLevels: Type.Optional(Type.Array(GatewayThinkingLevelOptionSchema)),
   thinkingDefault: Type.Optional(NonEmptyString),
-  effectiveFastMode: Type.Optional(Type.Union([Type.Boolean(), Type.Literal("auto")])),
+  effectiveFastMode: Type.Optional(
+    Type.Union([Type.Boolean(), Type.Literal("auto"), Type.Literal("ultrafast")]),
+  ),
+  /** Account-scoped service tiers advertised for this selected runtime. Missing means unknown. */
+  serviceTiers: Type.Optional(Type.Array(NonEmptyString)),
   /** Local selected-request applicability, not preference or upstream fulfillment. */
   supportsFastMode: Type.Optional(Type.Boolean()),
   supportsTools: Type.Optional(Type.Boolean()),
@@ -119,6 +123,13 @@ export const ModelCatalogProviderOutcomeSchema = closedObject({
 
 export const ModelsListResultSchema = closedObject({
   models: Type.Array(ModelChoiceSchema),
+  /** The Gateway owns role restrictions and the effective permitted reset target. */
+  modelSelectionPolicy: Type.Optional(
+    closedObject({
+      restricted: Type.Literal(true),
+      defaultModel: Type.Union([NonEmptyString, Type.Null()]),
+    }),
+  ),
   /** Manifest-owned decision choices, separate from conversational model routing. */
   decisionModels: Type.Optional(
     Type.Array(
@@ -127,6 +138,36 @@ export const ModelsListResultSchema = closedObject({
         provider: NonEmptyString,
         name: NonEmptyString,
         pluginId: NonEmptyString,
+        capabilities: Type.Optional(
+          closedObject({
+            questionTypes: Type.Array(
+              Type.Union([Type.Literal("boolean"), Type.Literal("choice"), Type.Literal("score")]),
+              { minItems: 1, maxItems: 3, uniqueItems: true },
+            ),
+            maxQuestions: Type.Optional(
+              Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
+            ),
+            maxChoiceAlternatives: Type.Optional(
+              Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
+            ),
+            maxScoreLevels: Type.Optional(
+              Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
+            ),
+            maxInputTokens: Type.Optional(
+              Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
+            ),
+            inputTokenScope: Type.Optional(
+              Type.Union([
+                Type.Literal("encoded-question"),
+                Type.Literal("state-plus-each-criterion"),
+              ]),
+            ),
+            requiresBooleanCriteria: Type.Optional(Type.Boolean()),
+            confidence: Type.Optional(
+              Type.Union([Type.Literal("provider-specific"), Type.Literal("none")]),
+            ),
+          }),
+        ),
       }),
     ),
   ),

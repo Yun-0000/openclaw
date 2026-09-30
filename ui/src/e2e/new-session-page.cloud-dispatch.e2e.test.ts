@@ -15,6 +15,7 @@ import {
   WORKSPACE,
   captureUiProof,
   captureUiProofEnabled,
+  checkoutBaseRefInput,
   controlUiSessionPath,
   controlUiSessionUrl,
   createCloudAgentsListResponse,
@@ -280,13 +281,13 @@ suite.define(() => {
       await expect
         .poll(() => thinkingSlider.getAttribute("data-chat-thinking-values"))
         .toBe("off,minimal,low,medium,high");
-      const fastMode = page.locator(".new-session-page__composer [data-chat-speed-toggle]");
+      const fastMode = page.locator('.new-session-page__composer [data-chat-speed-option="on"]');
       await expect.poll(() => fastMode.count()).toBe(1);
       await expect.poll(() => fastMode.getAttribute("aria-checked")).toBe("false");
-      await expect.poll(() => fastMode.getAttribute("data-chat-speed-toggle")).toBe("on");
+      await expect.poll(() => fastMode.getAttribute("role")).toBe("radio");
       expect(
         await fastMode.evaluate((element) =>
-          element.classList.contains("chat-controls__speed-toggle"),
+          element.classList.contains("chat-controls__speed-option"),
         ),
       ).toBe(true);
       await fastMode.click();
@@ -314,7 +315,7 @@ suite.define(() => {
       await page.getByRole("button", { name: "Use this folder" }).click();
       await expect.poll(() => trigger.getAttribute("data-cloud-profile")).toBe("aws");
       await checkoutTrigger.click();
-      const baseRef = checkout.getByLabel("From", { exact: true });
+      const baseRef = checkoutBaseRefInput(checkout);
       await expect.poll(() => baseRef.getAttribute("placeholder")).toBe("main");
       expect(await baseRef.inputValue()).toBe("");
       await baseRef.fill("release");

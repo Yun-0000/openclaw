@@ -116,13 +116,18 @@ export const AgentEntryBaseSchema = z
     verboseDefault: z.enum(["off", "on", "full"]).optional(),
     toolProgressDetail: z.enum(["explain", "raw"]).optional(),
     reasoningDefault: z.enum(["on", "off", "stream"]).optional(),
-    fastModeDefault: z.union([z.boolean(), z.literal("auto")]).optional(),
+    fastModeDefault: z.union([z.boolean(), z.literal("auto"), z.literal("ultrafast")]).optional(),
     contextInjection: z
       .union([z.literal("always"), z.literal("continuation-skip"), z.literal("never")])
       .optional(),
     bootstrapMaxChars: z.number().int().positive().optional(),
     bootstrapTotalMaxChars: z.number().int().positive().optional(),
-    experimental: z.object({ localModelLean: z.boolean().optional() }).strict().optional(),
+    experimental: z
+      .object({
+        localModelLean: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
     skills: z.array(z.string()).optional(),
     subagents: z
       .object({
