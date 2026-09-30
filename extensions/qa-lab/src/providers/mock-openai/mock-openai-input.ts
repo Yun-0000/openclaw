@@ -154,6 +154,13 @@ function isSubagentRecoveryText(text: string): boolean {
   );
 }
 
+export function isMockSubagentSettledWake(text: string): boolean {
+  // Installed-candidate QA can still send the earlier session-wide wording.
+  return /^(?:\[[A-Za-z]{3} \d{4}-\d{2}-\d{2} [^\]\r\n]+\] )?\[Subagent Context\] Every subagent (?:in this batch|spawned from this session) has now settled\b/mu.test(
+    text,
+  );
+}
+
 export function resolveMockSubagentTurn(input: ResponsesInputItem[]):
   | {
       kind: "kickoff" | "worker" | "completion" | "settled" | "other";
@@ -182,11 +189,7 @@ export function resolveMockSubagentTurn(input: ResponsesInputItem[]):
     if (isInternalRuntimeContextCarrierText(current)) {
       continue;
     }
-    if (
-      /^(?:\[[A-Za-z]{3} \d{4}-\d{2}-\d{2} [^\]\r\n]+\] )?\[Subagent Context\] Every subagent spawned from this session has now settled/mu.test(
-        current,
-      )
-    ) {
+    if (isMockSubagentSettledWake(current)) {
       settled = true;
       continue;
     }
@@ -636,9 +639,6 @@ export function extractCurrentImageRequest(
 }
 
 export function parseToolOutputJson(toolOutput: string): Record<string, unknown> | null {
-  if (!toolOutput.trim()) {
-    return null;
-  }
   try {
     return JSON.parse(toolOutput) as Record<string, unknown>;
   } catch {

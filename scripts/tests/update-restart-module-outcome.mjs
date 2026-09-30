@@ -161,6 +161,7 @@ async function fixture({
     DEFINITION_DENIAL: /fixture-definition-denial/,
     resolveGatewayService: () => service,
     getUpdateRun: () => undefined,
+    getUpdateRunAsync: async () => undefined,
     isContainerEnvironment: () => false,
     resolveStateDir: () => "/fixture/state",
     mutateRun: (runId, update, options) => {
@@ -181,6 +182,8 @@ async function fixture({
       events.push("command:" + command);
       assert.equal(command, "restart");
       activation.assertCurrent?.();
+      // The command owner reports activation before awaiting the restart child.
+      activation.onGatewayStartAttempted?.();
       if (commandFailure) {
         throw commandFailure;
       }
@@ -268,10 +271,14 @@ async function fixture({
     "../daemon-cli/restart-health-probe",
     "../../utils/absolute-deadline",
     "update-command-post-update-maintenance",
+    "../../infra/update-candidate-predecessor-stop",
+    "update-command-legacy-service-stop",
     // Recovery and reporting stay real; only their I/O uses finite fixture facts.
     "update-command-failure-recovery",
+    "update-command-service-recovery",
     "update-command-plugins-internals",
     "../../process/exec-result",
+    "../../shared/null-writer",
     "../../shared/update-outcome",
     "../../infra/update-run-report",
     "../../infra/update-run-record",

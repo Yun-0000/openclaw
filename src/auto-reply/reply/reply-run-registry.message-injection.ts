@@ -30,6 +30,7 @@ import {
   type ReplyMessageInjectionResolution,
   type ReplyMessageInjectionTarget,
   type ReplyOperation,
+  type ReplyTurnParticipants,
 } from "./reply-run-registry.contracts.js";
 import {
   getAttachedBackend,
@@ -153,6 +154,7 @@ function resolveReplyBackendMessageInjection(
 export function resolveReplyMessageInjectionRejection(params: {
   operation: ReplyOperation | undefined;
   options?: ReplyBackendQueueMessageOptions;
+  personalToolParticipant?: ReplyMessageInjectionOptions["personalToolParticipant"];
   allowPendingUserInputAnswer?: false;
   assertCurrent?: () => void;
 }): ReplyMessageInjectionResolution {
@@ -181,6 +183,7 @@ export function resolveReplyMessageInjectionRejection(params: {
     backend,
     canInject,
     toolAuthorityFingerprint: operation.toolAuthorityFingerprint,
+    personalToolParticipants: operation.personalToolParticipants,
   });
 }
 
@@ -191,6 +194,8 @@ export function resolveReplyBackendMessageInjectionRejection(params: {
   canInject: () => boolean;
   toolAuthorityFingerprint?: string;
   options?: ReplyBackendQueueMessageOptions;
+  personalToolParticipant?: ReplyMessageInjectionOptions["personalToolParticipant"];
+  personalToolParticipants?: ReplyTurnParticipants;
   allowPendingUserInputAnswer?: false;
   assertCurrent?: () => void;
 }): ReplyMessageInjectionResolution {
@@ -212,6 +217,17 @@ export function resolveReplyBackendMessageInjectionRejection(params: {
     }
   } catch (error) {
     return { reason: "injection_unavailable", errorMessage: String(error) };
+  }
+  if (
+    backend.supportsCrossProfileSteering === false &&
+    params.options?.isInboundUserMessage === true &&
+    params.personalToolParticipant?.operatorAuthority &&
+    params.personalToolParticipant.operatorAuthority.profileId !==
+      params.personalToolParticipants?.resolve(undefined, { allowTurnOwner: () => true })?.profileId
+  ) {
+    // Question answers through injection also record participants. Leave another
+    // profile's input with followup custody before any question-only bypass.
+    return { reason: "tool_authority_mismatch", backend };
   }
   const mismatch = resolveReplyBackendQueueMessageMismatch(backend, params.options, params);
   const activeFingerprint = normalizeOptionalString(
@@ -246,6 +262,8 @@ export function resolveReplyBackendMessageInjectionRejection(params: {
           if (!(await injection.claimPendingUserInputAnswer?.(text, options))) {
             throw new Error("pending user input was not accepted");
           }
+          options?.onQueueAccepted?.(true);
+          options?.onQueueSettled?.();
         },
       },
     };
@@ -343,6 +361,7 @@ export function beginReplyMessageInjectionTarget(
     : undefined;
   const resolved = owner.resolve({
     options: queueOptions,
+    personalToolParticipant: toolAuthorityOverlay ?? personalToolParticipant,
     inboundAudio,
     allowPendingUserInputAnswer,
     assertCurrent,
@@ -505,14 +524,15 @@ export async function finalizeReplyMessageInjectionAttempt(params: {
       adoptionError,
     };
   }
-  recordAcceptedReplyMessageInjectionTarget(params.target, {
+  const owner = params.target[replyMessageInjectionTargetOwner];
+  owner.recordAccepted({
     inboundAudio: params.inboundAudio,
   });
   let aborted =
     outcome.result?.transcriptCommit === "unconfirmed" &&
     params.abortOnUnconfirmedTranscript !== false;
   if (aborted) {
-    abortReplyMessageInjectionTarget(params.target);
+    owner.abort();
   }
   let adoptionError: unknown;
   try {
@@ -520,7 +540,7 @@ export async function finalizeReplyMessageInjectionAttempt(params: {
   } catch (error) {
     adoptionError = error;
     if (params.shouldAbortOnAdoptionError?.(error)) {
-      abortReplyMessageInjectionTarget(params.target);
+      owner.abort();
       aborted = true;
     }
   }
@@ -531,17 +551,4 @@ export async function finalizeReplyMessageInjectionAttempt(params: {
     aborted,
     ...(adoptionError === undefined ? {} : { adoptionError }),
   };
-}
-
-/** Abort only the captured owner; never a same-key successor. */
-function abortReplyMessageInjectionTarget(target: ReplyMessageInjectionTarget): boolean {
-  return target[replyMessageInjectionTargetOwner].abort();
-}
-
-/** Record accepted input on the captured owner without rediscovering its session slot. */
-function recordAcceptedReplyMessageInjectionTarget(
-  target: ReplyMessageInjectionTarget,
-  options?: { inboundAudio?: boolean },
-): void {
-  target[replyMessageInjectionTargetOwner].recordAccepted(options);
 }
