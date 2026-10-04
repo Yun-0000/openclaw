@@ -138,10 +138,19 @@ function resolveTerminalRequest(
     completionOutcome = { status: "timeout" };
     completionReason = SUBAGENT_ENDED_REASON_COMPLETE;
   }
-  const terminalReply = mergeAgentRunTerminalReplySnapshot(
-    entry.completion?.terminalReply,
-    completeParams.terminalReply,
-  );
+  const existingTerminalReply = entry.completion?.terminalReply;
+  // An older equivalent receipt keeps the newer end time so cleanup can finish,
+  // but its reply is stale. Visible and silent producer evidence already stored
+  // for that newer end must not be replaced.
+  const retainedNewerReply =
+    olderEquivalent &&
+    (existingTerminalReply?.disposition === "visible" ||
+      existingTerminalReply?.disposition === "silent")
+      ? existingTerminalReply
+      : undefined;
+  const terminalReply =
+    retainedNewerReply ??
+    mergeAgentRunTerminalReplySnapshot(existingTerminalReply, completeParams.terminalReply);
   return {
     requestedEndedAt,
     endedAt,

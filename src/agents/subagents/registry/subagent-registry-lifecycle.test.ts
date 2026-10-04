@@ -571,6 +571,36 @@ describe("subagent registry lifecycle hardening", () => {
     },
   );
 
+  it.each([
+    {
+      name: "visible answer",
+      newer: { disposition: "visible" as const, text: "newer final" },
+      older: { disposition: "visible" as const, text: "older final" },
+      resultText: "newer final",
+    },
+    {
+      name: "intentional silence",
+      newer: { disposition: "silent" as const },
+      older: { disposition: "visible" as const, text: "older final" },
+      resultText: "NO_REPLY",
+    },
+  ])(
+    "keeps a newer $name when an older equivalent completion receipt arrives",
+    async ({ newer, older, resultText }) => {
+      const entry = createRunEntry({ expectsCompletionMessage: true });
+      const controller = createLifecycleController({ entry });
+      await completeRun(controller, entry, { terminalReply: newer, endedAt: 4_000 });
+      await completeRun(controller, entry, { terminalReply: older, endedAt: 3_999 });
+
+      const stored = readLifecycleRun(entry);
+      expect(stored.execution.endedAt).toBe(4_000);
+      expect(stored.completion).toMatchObject({
+        terminalReply: newer,
+        resultText,
+      });
+    },
+  );
+
   it("fails a required successful completion without producer reply evidence", async () => {
     const entry = createRunEntry({ expectsCompletionMessage: true });
     const captureSubagentCompletionReply = vi.fn(async () => "stale transcript reply");
