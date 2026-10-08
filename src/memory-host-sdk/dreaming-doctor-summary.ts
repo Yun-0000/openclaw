@@ -34,7 +34,7 @@ function finiteTimestamp(value: number | undefined): number | undefined {
 }
 
 /** Managed dreaming jobs only. A promotion timestamp on a memory store is a different fact. */
-export function isManagedMemoryDreamingCronJob(job: ManagedDreamingCronJobSnapshot): boolean {
+function isManagedMemoryDreamingCronJob(job: ManagedDreamingCronJobSnapshot): boolean {
   const description = normalizeOptionalString(job.description);
   if (description?.includes(MANAGED_MEMORY_DREAMING_CRON_TAG)) {
     return true;
