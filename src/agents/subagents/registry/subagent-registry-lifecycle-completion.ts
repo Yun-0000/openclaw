@@ -128,19 +128,15 @@ function resolveTerminalRequest(
     completionOutcome = { status: "timeout" };
     completionReason = SUBAGENT_ENDED_REASON_COMPLETE;
   }
-  const existingTerminalReply = entry.completion?.terminalReply;
-  // An older equivalent receipt keeps the newer end time so cleanup can finish,
-  // but its reply is stale. Visible and silent producer evidence already stored
-  // for that newer end must not be replaced.
-  const retainedNewerReply =
-    olderEquivalent &&
-    (existingTerminalReply?.disposition === "visible" ||
-      existingTerminalReply?.disposition === "silent")
-      ? existingTerminalReply
-      : undefined;
-  const terminalReply =
-    retainedNewerReply ??
-    mergeAgentRunTerminalReplySnapshot(existingTerminalReply, completeParams.terminalReply);
+  // Reply evidence follows producer order; duplicate receipts may still drain cleanup.
+  const terminalReply = mergeAgentRunTerminalReplySnapshot(
+    entry.completion?.terminalReply,
+    entry.completion?.terminalReply &&
+      typeof existingEndedAt === "number" &&
+      (completeParams.endedAt ?? now) <= existingEndedAt
+      ? undefined
+      : completeParams.terminalReply,
+  );
   return {
     requestedEndedAt,
     endedAt,
@@ -643,27 +639,25 @@ function planTerminalCompletion(
     entry.pauseReason = undefined;
   }
 
+  const completion = ensureCompletionState(entry);
   if (completeParams.completionSnapshot) {
-    const completion = ensureCompletionState(entry);
     completion.resultText = completeParams.completionSnapshot.resultText;
     completion.capturedAt = completeParams.completionSnapshot.capturedAt;
   }
 
-  if (terminalReply) {
-    const completion = ensureCompletionState(entry);
-    if (
-      JSON.stringify(terminalReply) !== JSON.stringify(completion.terminalReply) ||
-      completion.resultText === undefined
-    ) {
-      completion.terminalReply = terminalReply;
-      completion.resultText =
-        terminalReply.disposition === "visible"
-          ? terminalReply.text
-          : terminalReply.disposition === "silent"
-            ? SILENT_REPLY_TOKEN
-            : null;
-      completion.capturedAt = endedAt;
-    }
+  if (
+    terminalReply &&
+    (JSON.stringify(terminalReply) !== JSON.stringify(completion.terminalReply) ||
+      completion.resultText === undefined)
+  ) {
+    completion.terminalReply = terminalReply;
+    completion.resultText =
+      terminalReply.disposition === "visible"
+        ? terminalReply.text
+        : terminalReply.disposition === "silent"
+          ? SILENT_REPLY_TOKEN
+          : null;
+    completion.capturedAt = endedAt;
   }
 
   const closesAsIntentionalNonDelivery =
@@ -684,26 +678,23 @@ function planTerminalCompletion(
     entry.suppressCompletionDelivery = true;
   }
 
-  const completion = ensureCompletionState(entry);
   if (completion.resultText === undefined) {
     if (recoveryRequested || sessionSuperseded || executionOutcome.status === "error") {
       completion.resultText = null;
       completion.capturedAt = prepared.now;
-    } else if (prepared.capture) {
+    } else {
+      const capture = prepared.capture;
       if (
-        !isDeepStrictEqual(entry.execution.transcriptTarget, prepared.capture.transcriptTarget) ||
-        !isDeepStrictEqual(executionOutcome, prepared.capture.outcome)
+        !capture ||
+        !isDeepStrictEqual(entry.execution.transcriptTarget, capture.transcriptTarget) ||
+        !isDeepStrictEqual(executionOutcome, capture.outcome)
       ) {
         throw new SubagentRegistryMutationRejectedError(
           "Subagent completion requires fresh result capture",
         );
       }
-      completion.resultText = prepared.capture.resultText;
-      completion.capturedAt = prepared.capture.capturedAt;
-    } else {
-      throw new SubagentRegistryMutationRejectedError(
-        "Subagent completion requires fresh result capture",
-      );
+      completion.resultText = capture.resultText;
+      completion.capturedAt = capture.capturedAt;
     }
   }
   if (entry.collect) {
