@@ -843,6 +843,38 @@ describe("resolveSystemNodeInfo", () => {
     expect(execFile).not.toHaveBeenCalled();
   });
 
+  it.each([
+    {
+      name: "unused system candidate",
+      selected: "/home/linuxbrew/.linuxbrew/opt/node/bin/node",
+      unused: true,
+    },
+    {
+      name: "daemon executable",
+      selected: "/usr/bin/node",
+      unused: false,
+    },
+  ])("attributes a TEXT capability failure to the $name", ({ selected, unused }) => {
+    const warning = renderSystemNodeWarning(
+      {
+        path: "/usr/bin/node",
+        sqliteProbe: { available: true, version: "3.51.3", text: false, blob: true, json: true },
+        sqliteVersion: "3.51.3",
+        version: "22.23.3",
+        nodeSharedSqlite: false,
+        status: "unsupported",
+        capabilityError:
+          "Node 22.23.3: node:sqlite truncates TEXT at embedded NUL (nodejs/node#61954); use 24.16+/26.1+ or a build with the fix",
+      },
+      selected,
+    );
+
+    expect(warning).toContain("System Node 22.23.3 at /usr/bin/node");
+    expect(warning).toContain("truncates TEXT at embedded NUL");
+    expect(warning).toContain(`Using ${selected} for the daemon.`);
+    expect(warning?.includes("unused system candidate")).toBe(unused);
+  });
+
   it("reports a known unsupported system Node version", () => {
     const selectedNode = "/Users/me/.fnm/node-22/bin/node";
     const warning = renderSystemNodeWarning(

@@ -426,11 +426,14 @@ export function renderSystemNodeWarning(
     return `${systemNode.error.message}${selectedLabel}`;
   }
   const versionLabel = systemNode.version;
-  if (
-    systemNode.capabilityError &&
-    (!systemNode.sqliteProbe.text || systemNode.sqliteProbe.error)
-  ) {
-    return `${systemNode.capabilityError}${selectedLabel}`;
+  const capabilityError = systemNode.capabilityError;
+  if (capabilityError && (!systemNode.sqliteProbe.text || systemNode.sqliteProbe.error)) {
+    return renderSystemNodeCapabilityWarning({
+      path: systemNode.path,
+      capabilityError,
+      versionLabel,
+      selectedNodePath,
+    });
   }
   if (isSupportedNodeVersion(systemNode.version)) {
     const sqliteLabel = systemNode.sqliteVersion ?? "unknown";
@@ -443,6 +446,26 @@ export function renderSystemNodeWarning(
     return `System Node ${versionLabel} at ${systemNode.path} uses SQLite ${sqliteLabel}, which is not WAL-reset-safe.${selectedLabel} Install Node ${SUPPORTED_NODE_VERSIONS} from nodejs.org or Homebrew.`;
   }
   return `System Node ${versionLabel} at ${systemNode.path} is outside the supported range.${selectedLabel} Install Node ${SUPPORTED_NODE_VERSIONS} from nodejs.org or Homebrew.`;
+}
+
+function renderSystemNodeCapabilityWarning(params: {
+  path: string;
+  capabilityError: string;
+  versionLabel: string | null;
+  selectedNodePath: string | undefined;
+}): string {
+  const failure = `System Node ${params.versionLabel} at ${params.path} failed its SQLite capability check: ${params.capabilityError}.`;
+  if (!params.selectedNodePath) {
+    return failure;
+  }
+  const daemon = ` Using ${params.selectedNodePath} for the daemon.`;
+  const sameExecutable =
+    normalizeServicePathEntry(params.selectedNodePath, process.platform) ===
+    normalizeServicePathEntry(params.path, process.platform);
+  if (sameExecutable) {
+    return `${failure}${daemon}`;
+  }
+  return `${failure}${daemon} That executable was not probed; the failure belongs to this unused system candidate.`;
 }
 type RuntimePathOptions = {
   env?: Record<string, string | undefined>;
