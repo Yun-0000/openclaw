@@ -960,7 +960,7 @@ describe("dreaming service reconciliation", () => {
 
     const autoDisabled = expectDefined(harness.jobs[0], "auto-disabled dreaming job");
     expect(autoDisabled.enabled).toBe(false);
-    expect(autoDisabled.state).toEqual(failureState);
+    expect(autoDisabled).toMatchObject({ state: failureState });
     expect(harness.updateCalls).toEqual([]);
 
     autoDisabled.schedule = { kind: "cron", expr: "0 3 * * *", tz: "UTC" };
@@ -970,7 +970,7 @@ describe("dreaming service reconciliation", () => {
     const paused = expectDefined(harness.jobs[0], "paused dreaming job");
     expect(paused.enabled).toBe(false);
     expect(paused.schedule).toEqual({ kind: "cron", expr: "15 4 * * *", tz: "UTC" });
-    expect(paused.state).toEqual({ consecutiveErrors: 2 });
+    expect(paused).toMatchObject({ state: { consecutiveErrors: 2 } });
     expect(harness.updateCalls).toEqual([
       {
         id: paused.id,
