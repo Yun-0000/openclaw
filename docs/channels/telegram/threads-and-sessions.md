@@ -16,6 +16,8 @@ How forum topics map to sessions, agents, and ACP bindings.
   <Accordion title="Forum topics and thread behavior">
     Forum supergroups: topic session keys append `:topic:<threadId>`; replies and typing target the topic thread; topic config path is `channels.telegram.groups.<chatId>.topics.<threadId>`.
 
+    Topic IDs must be positive integers. OpenClaw rejects topic `0` in delivery targets and explicit thread options before making Telegram requests.
+
     General topic (`threadId=1`) is a special case: message sends omit `message_thread_id` (Telegram rejects `sendMessage(...thread_id=1)` with "thread not found"), but typing actions still include `message_thread_id` (empirically required for the typing indicator to appear).
 
     Topic entries inherit group settings unless overridden (`requireMention`, `requireMentionInBotThreads`, `allowFrom`, `skills`, `systemPrompt`, `enabled`, `groupPolicy`). `agentId` is topic-only and does not inherit from group defaults. `topics."*"` sets defaults for every topic in that group; exact topic IDs still win over `"*"`.
@@ -50,8 +52,10 @@ How forum topics map to sessions, agents, and ACP bindings.
 
     Disabling `threadBindings.enabled` globally, for Telegram, or for one account leaves ordinary Telegram messages working.
 
-    Template context exposes `MessageThreadId` and `IsForum`. DM chats with `message_thread_id` keep reply metadata but only use thread-aware session keys when Telegram `getMe` reports `has_topics_enabled: true`.
+    Template context exposes `MessageThreadId` and `IsForum`. DM chats with `message_thread_id` use thread-aware session keys when Telegram reports topics enabled. Native private-topic messages and title updates also establish topic scope when startup `getMe` data is stale.
     The retired `dm.threadReplies` and `direct.*.threadReplies` overrides are gone; BotFather threaded mode is the single source of truth. Run `openclaw doctor --fix` to remove stale config keys.
+
+    Observed private-topic creation and rename events update the existing session's name in the connected Control UI without starting an agent turn. A manually chosen session label keeps priority over the native topic name. Renaming an unmessaged topic does not create a session.
 
   </Accordion>
 </AccordionGroup>

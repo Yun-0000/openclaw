@@ -1,40 +1,34 @@
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "./bus-state.js";
-import { runLoadedScenarioFlow } from "./scenario-flow-runner.test-support.js";
-
-function splitModelRef(raw: string) {
-  const [provider, ...model] = raw.split("/");
-  return provider && model.length
-    ? { provider: provider.toLowerCase(), model: model.join("/") }
-    : null;
-}
-
-function normalizeModelRef(raw: string) {
-  const split = splitModelRef(raw);
-  if (!split) {
-    return null;
-  }
-  return split.provider === "openai" && split.model.toLowerCase() === "alternate-alias"
-    ? { provider: "openai", model: "alternate-model" }
-    : split;
-}
+import { normalizeModelRef, splitModelRef } from "./model-switch.test-support.js";
+import {
+  addQaFlowTestOutbound,
+  runLoadedScenarioFlow,
+} from "./scenario-flow-runner.test-support.js";
 
 function terminalReceipt(params: {
   runId: string;
   provider: string;
   model: string;
   responseModel?: string;
+  rerouted?: boolean;
+  effective?: { provider?: string; model?: string };
 }) {
-  const responseModel = params.responseModel ?? params.model;
+  const effective = {
+    provider: params.effective?.provider ?? params.provider,
+    model: params.effective?.model ?? params.model,
+  };
+  const responseModel = params.responseModel ?? effective.model;
   return {
     runId: params.runId,
     sessionId: "session-model-switch",
     turnId: `turn-${params.runId}`,
     requested: { provider: params.provider, model: params.model },
-    effective: { provider: params.provider, model: params.model, responseModel },
+    effective: { ...effective, responseModel },
     successfulToolNames: [],
-    rerouted: responseModel !== params.model,
+    rerouted:
+      params.rerouted ?? (effective.provider !== params.provider || responseModel !== params.model),
     terminalDisposition: "visible",
   };
 }
@@ -49,7 +43,11 @@ async function runFollowUp(params?: {
   alternateOutboundText?: string;
   alternateDelivery?: { status: string; resultCount: number } | null;
   primaryResponseModel?: string;
+  primaryRerouted?: boolean;
+  primaryEffective?: { provider?: string; model?: string };
   alternateResponseModel?: string;
+  alternateRerouted?: boolean;
+  alternateEffective?: { provider?: string; model?: string };
   unrelatedPrimaryOutboundText?: string;
   unrelatedLaterOutboundText?: string;
   onRun?: () => void;
@@ -67,27 +65,18 @@ async function runFollowUp(params?: {
         call === 1
           ? (params?.primaryReplyText ?? "hello from the primary model")
           : (params?.alternateReplyText ?? "the model switch handoff completed");
-      state.addOutboundMessage({
-        accountId: "qa-channel",
-        to: "dm:qa-operator",
-        text:
-          call === 1
-            ? (params?.primaryOutboundText ?? replyText)
-            : (params?.alternateOutboundText ?? replyText),
-      });
+      addQaFlowTestOutbound(
+        state,
+        "dm:qa-operator",
+        call === 1
+          ? (params?.primaryOutboundText ?? replyText)
+          : (params?.alternateOutboundText ?? replyText),
+      );
       if (call === 1 && params?.unrelatedPrimaryOutboundText) {
-        state.addOutboundMessage({
-          accountId: "qa-channel",
-          to: "dm:qa-operator",
-          text: params.unrelatedPrimaryOutboundText,
-        });
+        addQaFlowTestOutbound(state, "dm:qa-operator", params.unrelatedPrimaryOutboundText);
       }
       if (call === 2 && params?.unrelatedLaterOutboundText) {
-        state.addOutboundMessage({
-          accountId: "qa-channel",
-          to: "dm:qa-operator",
-          text: params.unrelatedLaterOutboundText,
-        });
+        addQaFlowTestOutbound(state, "dm:qa-operator", params.unrelatedLaterOutboundText);
       }
       const terminalDelivery = call === 1 ? params?.primaryDelivery : params?.alternateDelivery;
       return {
@@ -106,6 +95,8 @@ async function runFollowUp(params?: {
             model,
             responseModel:
               call === 1 ? params?.primaryResponseModel : params?.alternateResponseModel,
+            rerouted: call === 1 ? params?.primaryRerouted : params?.alternateRerouted,
+            effective: call === 1 ? params?.primaryEffective : params?.alternateEffective,
           }),
         },
       };
@@ -137,6 +128,10 @@ describe("model-switch follow-up terminal evidence", () => {
       primaryOutboundText: "hello from the primary model",
       alternateReplyText: "the **model switch** handoff completed",
       alternateOutboundText: "the model switch handoff completed",
+      primaryResponseModel: "primary-model-concrete",
+      primaryRerouted: false,
+      alternateResponseModel: "alternate-model-concrete",
+      alternateRerouted: false,
     });
 
     expect(result.status).toBe("pass");
@@ -145,8 +140,8 @@ describe("model-switch follow-up terminal evidence", () => {
       model: "alternate-model",
     });
     expect(result.modelSwitchEvidence).toMatchObject({
-      primary: { runId: "run-1", effective: { responseModel: "primary-model" } },
-      alternate: { runId: "run-2", effective: { responseModel: "alternate-model" } },
+      primary: { runId: "run-1", effective: { responseModel: "primary-model-concrete" } },
+      alternate: { runId: "run-2", effective: { responseModel: "alternate-model-concrete" } },
       terminalReply: {
         disposition: "visible",
         text: "the **model switch** handoff completed",
@@ -157,78 +152,44 @@ describe("model-switch follow-up terminal evidence", () => {
     expect(result.steps[1]?.details).toBe("the **model switch** handoff completed");
   });
 
-  it("rejects a delayed prior-run receipt", async () => {
-    await expect(runFollowUp({ alternateReceiptRunId: "run-1" })).rejects.toThrow(
-      "alternate-model run did not return distinct exact owned model evidence",
-    );
-  });
-
-  it("accepts a response-model reroute recorded by the terminal receipt", async () => {
-    const { result } = await runFollowUp({
-      primaryResponseModel: "primary-model-served",
-      alternateResponseModel: "alternate-model-served",
-    });
-
-    expect(result.status).toBe("pass");
-    expect(result.modelSwitchEvidence).toMatchObject({
-      primary: {
-        effective: { model: "primary-model", responseModel: "primary-model-served" },
-        rerouted: true,
-      },
-      alternate: {
-        effective: { model: "alternate-model", responseModel: "alternate-model-served" },
-        rerouted: true,
-      },
-    });
-  });
-
-  it("rejects normalized-identical refs before starting an agent run", async () => {
-    const onRun = vi.fn();
-    await expect(runFollowUp({ alternateModel: "OPENAI/primary-model", onRun })).rejects.toThrow(
-      "primary and alternate models must normalize to different refs",
-    );
-    expect(onRun).not.toHaveBeenCalled();
-  });
-
-  it("rejects unrelated later continuity text when the alternate reply lacks it", async () => {
-    await expect(
-      runFollowUp({
-        alternateReplyText: "the alternate run completed",
-        unrelatedLaterOutboundText: "the model switch handoff completed",
-      }),
-    ).rejects.toThrow("alternate-model terminal reply missed switch continuity");
-  });
+  const receiptErrors = {
+    default: "default-model run did not return an exact owned terminal receipt",
+    alternate: "alternate-model run did not return distinct exact owned model evidence",
+  } as const;
+  const receiptOverrides = (
+    run: keyof typeof receiptErrors,
+    rerouted: boolean,
+    effective?: { provider?: string; model?: string },
+  ) =>
+    run === "default"
+      ? { primaryRerouted: rerouted, primaryEffective: effective }
+      : { alternateRerouted: rerouted, alternateEffective: effective };
 
   it.each([
-    ["missing", null],
-    ["suppressed", { status: "suppressed", resultCount: 0 }],
-    ["zero-count", { status: "sent", resultCount: 0 }],
-  ] as const)(
-    "rejects %s primary delivery evidence despite identical and unrelated bus messages",
-    async (_, evidence) => {
-      await expect(
-        runFollowUp({
-          primaryDelivery: evidence,
-          primaryOutboundText: "hello from the primary model",
-          unrelatedPrimaryOutboundText: "an unrelated run also replied",
-        }),
-      ).rejects.toThrow("default-model run did not return owned sent delivery evidence");
+    { run: "default" as const, changed: "model", effective: { model: "fallback-model" } },
+    { run: "default" as const, changed: "provider", effective: { provider: "fallback-provider" } },
+    { run: "alternate" as const, changed: "model", effective: { model: "fallback-model" } },
+    {
+      run: "alternate" as const,
+      changed: "provider",
+      effective: { provider: "fallback-provider" },
+    },
+  ])(
+    "requires a changed $run effective $changed to be marked rerouted",
+    async ({ run, effective }) => {
+      const { result } = await runFollowUp(receiptOverrides(run, true, effective));
+      expect(result.status).toBe("pass");
+
+      await expect(runFollowUp(receiptOverrides(run, false, effective))).rejects.toThrow(
+        receiptErrors[run],
+      );
     },
   );
 
-  it.each([
-    ["missing", null],
-    ["suppressed", { status: "suppressed", resultCount: 0 }],
-    ["zero-count", { status: "sent", resultCount: 0 }],
-  ] as const)(
-    "rejects %s delivery evidence despite an identical bus message",
-    async (_, evidence) => {
-      await expect(
-        runFollowUp({
-          alternateDelivery: evidence,
-          alternateOutboundText: "the model switch handoff completed",
-        }),
-      ).rejects.toThrow("alternate-model run did not return owned sent delivery evidence");
+  it.each(["default", "alternate"] as const)(
+    "rejects an unchanged %s route reported as rerouted",
+    async (run) => {
+      await expect(runFollowUp(receiptOverrides(run, true))).rejects.toThrow(receiptErrors[run]);
     },
   );
 });

@@ -8,8 +8,9 @@ import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { WorkerTunnelHandle } from "../../gateway/worker-environments/tunnel-contract.js";
 import { prepareWorkerTurnMedia } from "../../gateway/worker-environments/worker-turn-media.js";
+import { listDirectoryTreeStrict } from "../../infra/directory-walk.js";
 import type { Model } from "../../llm/types.js";
-import { buildEmbeddedRunBaseParams } from "./agent-runner-run-params.js";
+import { buildEmbeddedRunExecutionParams } from "./agent-runner-utils.js";
 import type { FollowupRun } from "./queue.js";
 
 const { loadScopedCatalog } = vi.hoisted(() => ({
@@ -55,7 +56,7 @@ describe("ordinary reply model capability at cloud media admission", () => {
       const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "reply-vision-")));
       roots.push(root);
       const cfg: OpenClawConfig = {
-        agents: { list: [{ id: "main", workspace: root }] },
+        agents: { entries: { main: { workspace: root } } },
         ...(testCase.configured
           ? {
               models: {
@@ -103,12 +104,13 @@ describe("ordinary reply model capability at cloud media admission", () => {
       loadScopedCatalog.mockResolvedValue([
         { provider: "acme", id: testCase.selected, name: "Selected", input: [...vision] },
       ]);
-      const produced = await buildEmbeddedRunBaseParams({
+      const produced = await buildEmbeddedRunExecutionParams({
         run,
         provider: "acme",
         model: testCase.selected,
         runId: "vision-run",
-        authProfile: {},
+        sessionCtx: {},
+        hasRepliedRef: undefined,
       });
       const images = [
         createSolidPngBuffer(2, 2, { r: 255, g: 0, b: 0 }),
@@ -131,10 +133,9 @@ describe("ordinary reply model capability at cloud media admission", () => {
         reconcileWorkspace: unexpected,
         stop: unexpected,
         stageAttachments: async ({ localPath }) => {
-          for (const entry of await fs.readdir(localPath, {
-            recursive: true,
-            withFileTypes: true,
-          })) {
+          for (const entry of (await listDirectoryTreeStrict(localPath)).map(
+            (walkEntry) => walkEntry.dirent,
+          )) {
             if (entry.isFile()) {
               staged.push(await fs.readFile(path.join(entry.parentPath, entry.name)));
             }

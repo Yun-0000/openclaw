@@ -13,34 +13,6 @@ import {
 import { textResult } from "openclaw/plugin-sdk/tool-results";
 import { llmTaskToolDefinition } from "./llm-task-tool-definition.js";
 
-function stripCodeFences(s: string): string {
-  const trimmed = s.trim();
-  const m = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
-  if (m) {
-    return (m[1] ?? "").trim();
-  }
-  return trimmed;
-}
-
-function toModelKey(provider?: string, model?: string): string | undefined {
-  const p = provider?.trim();
-  const m = model?.trim();
-  if (!p || !m) {
-    return undefined;
-  }
-  return `${p}/${m}`;
-}
-
-function stripDuplicateProviderPrefix(provider: string | undefined, model: string | undefined) {
-  const p = provider?.trim();
-  const m = model?.trim();
-  if (!p || !m) {
-    return m || undefined;
-  }
-  const prefix = `${p}/`;
-  return m.startsWith(prefix) ? m.slice(prefix.length) : m;
-}
-
 function resolveLlmTaskModelRef(params: {
   api: OpenClawPluginApi;
   provider?: string;
@@ -51,16 +23,20 @@ function resolveLlmTaskModelRef(params: {
     normalizeOptionalString(params.provider) ??
     normalizeOptionalString(params.api.runtime.agent.defaults.provider);
   const rawModel = normalizeOptionalString(params.rawModel);
+  const providerPrefix = params.provider?.trim();
   const selectedModelRef = {
     provider: params.provider,
-    model: stripDuplicateProviderPrefix(params.provider, rawModel),
+    model:
+      providerPrefix && rawModel?.startsWith(`${providerPrefix}/`)
+        ? rawModel.slice(providerPrefix.length + 1)
+        : rawModel,
   };
   if (!rawModel || !defaultProvider) {
     return selectedModelRef;
   }
 
   const cfg = params.api.config;
-  const aliasIndex = cfg ? buildModelAliasIndex({ cfg, defaultProvider }) : undefined;
+  const aliasIndex = buildModelAliasIndex({ cfg, defaultProvider });
   const resolved = resolveModelRefFromString({
     cfg,
     raw: rawModel,
@@ -87,14 +63,13 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
 
       const pluginCfg = api.pluginConfig ?? {};
 
-      const defaultsModel = api.config?.agents?.defaults?.model;
+      const defaultsModel = api.config.agents?.defaults?.model;
       const primary =
         typeof defaultsModel === "string"
           ? normalizeOptionalString(defaultsModel)
           : normalizeOptionalString(defaultsModel?.primary);
-      const primaryProvider = typeof primary === "string" ? primary.split("/")[0] : undefined;
-      const primaryModel =
-        typeof primary === "string" ? primary.split("/").slice(1).join("/") : undefined;
+      const primaryProvider = primary?.split("/")[0];
+      const primaryModel = primary?.split("/").slice(1).join("/");
 
       const requestProvider = normalizeOptionalString(params.provider);
       const configuredProvider = normalizeOptionalString(pluginCfg.defaultProvider);
@@ -117,8 +92,9 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
         normalizeOptionalString(params.authProfileId) ??
         normalizeOptionalString(pluginCfg.defaultAuthProfileId);
 
-      const modelKey = toModelKey(provider, model);
-      if (!provider || !model || !modelKey) {
+      const providerId = provider?.trim();
+      const modelId = model?.trim();
+      if (!providerId || !modelId) {
         throw new Error(
           `provider/model could not be resolved (provider=${provider ?? ""}, model=${model ?? ""})`,
         );
@@ -156,6 +132,10 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
         "Do not include commentary.",
         "Do not call tools.",
       ].join(" ");
+      const outputSchema =
+        params.schema && typeof params.schema === "object" && !Array.isArray(params.schema)
+          ? (params.schema as JsonSchemaObject)
+          : undefined;
 
       const result = await api.runtime.llm.complete({
         messages: [
@@ -165,12 +145,13 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
           },
         ],
         systemPrompt: system,
-        model: hasModelOverride ? modelKey : undefined,
+        model: hasModelOverride ? `${providerId}/${modelId}` : undefined,
         reasoning: thinkLevel,
         maxTokens,
         temperature,
         signal,
         purpose: "llm-task",
+        ...(outputSchema ? { outputSchema } : {}),
         execution: {
           mode: "isolated-agent-runtime",
           authProfileId,
@@ -178,7 +159,9 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
         },
       });
 
-      const raw = stripCodeFences(result.text);
+      const trimmed = result.text.trim();
+      const match = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+      const raw = match ? (match[1] ?? "").trim() : trimmed;
       let parsed: unknown;
       try {
         parsed = JSON.parse(raw);
@@ -186,10 +169,9 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
         throw new Error("LLM returned invalid JSON");
       }
 
-      const schema = params.schema;
-      if (schema && typeof schema === "object" && !Array.isArray(schema)) {
+      if (outputSchema) {
         const validation = validateJsonSchemaValue({
-          schema: schema as JsonSchemaObject,
+          schema: outputSchema,
           cacheKey: "llm-task.result",
           value: parsed,
           cache: false,

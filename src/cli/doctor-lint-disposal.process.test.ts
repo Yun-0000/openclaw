@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, expect, it } from "vitest";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
+import { createTestModelDefinition } from "../commands/test-runtime-config-helpers.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { buildUpdateRehearsalPathEnv } from "../infra/update-rehearsal-paths.js";
 import { buildUpdateDoctorEnv } from "../infra/update-runner-doctor.js";
@@ -25,6 +26,7 @@ it.each(["release", "timeout"])(
       const plugin = path.join(root, "plugin");
       const release = path.join(root, "release-disposal");
       const observation = path.join(root, "disposal.json");
+      const naturalExit = path.join(root, "natural-exit");
       fs.mkdirSync(plugin);
       fs.mkdirSync(path.join(root, "workspace"));
       fs.writeFileSync(
@@ -47,6 +49,7 @@ it.each(["release", "timeout"])(
         path.join(plugin, "index.cjs"),
         `const fs = require("node:fs");
 module.exports = { id: "disposal-proof", register(api) {
+  process.once("beforeExit", () => fs.writeFileSync(${JSON.stringify(naturalExit)}, "closed"));
   api.lifecycle.registerRuntimeLifecycle({ id: "retirement", async dispose() {
     fs.writeFileSync(${JSON.stringify(observation)}, JSON.stringify({pid: process.pid, stateDir: process.env.OPENCLAW_STATE_DIR}));
     process.stderr.write("fixture disposal entered\\n");
@@ -72,15 +75,11 @@ module.exports = { id: "disposal-proof", register(api) {
               api: "openai-completions",
               baseUrl: "http://127.0.0.1:1/v1",
               models: [
-                {
-                  id: "local",
+                createTestModelDefinition("local", {
                   name: "Synthetic local model",
-                  reasoning: false,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
                   contextWindow: 128000,
                   maxTokens: 8192,
-                },
+                }),
               ],
             },
           },
@@ -197,6 +196,12 @@ try {
       expect(workerPid).toBeTypeOf("number");
       expect(() => process.kill(workerPid!, 0)).toThrow();
       expect(fs.readFileSync(configPath, "utf8")).toBe(config);
+      if (mode === "release") {
+        expect(
+          fs.existsSync(naturalExit),
+          "Doctor worker must drain native handles naturally",
+        ).toBe(true);
+      }
       if (mode === "timeout") {
         expect(result.stderr).toMatch(/Doctor disposal timed out after \d+ms; checks completed/u);
       }

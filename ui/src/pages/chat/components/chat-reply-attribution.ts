@@ -1,14 +1,9 @@
-import { html, nothing } from "lit";
 import "./chat-attribution.css";
 import { resolveLocalUserName } from "../../../app/user-identity.ts";
-import { icons } from "../../../components/icons.ts";
-import { t } from "../../../i18n/index.ts";
 import type { MessageGroup, NormalizedMessage } from "../../../lib/chat/chat-types.ts";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
 import { formatSenderLabel, type SenderIdentity } from "../../../lib/chat/sender-label.ts";
-import { persistedMessageEntryId } from "../chat-thread.ts";
-import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
-import { renderReplyConnector } from "./chat-reply-connector.ts";
+import { persistedMessageEntryId } from "../chat-thread-items.ts";
 import type { ReplyPreview, ReplyPreviewLookup } from "./chat-reply-preview.types.ts";
 
 /**
@@ -24,28 +19,11 @@ export type ReplyLine = {
   agentAvatar?: ReplyPreview["agentAvatar"];
   /** The original the name navigates to, loaded or not. */
   openId?: string;
-  /** An original that still needs a lookup: unresolved, or named only by a snapshot. */
-  request?: string;
 };
 
 export const NO_REPLY_LINE: ReplyLine = { state: "hidden" };
 
 type ReplyContext = Pick<MessageGroup, "replyShared" | "replyTurnSource" | "runId">;
-
-// Transcript rows are immutable; re-renders reuse their normalized form.
-const normalizedMessages = new WeakMap<object, NormalizedMessage>();
-
-function normalizeReplyMessage(message: unknown): NormalizedMessage {
-  if (!message || typeof message !== "object") {
-    return normalizeMessage(message);
-  }
-  let normalized = normalizedMessages.get(message);
-  if (!normalized) {
-    normalized = normalizeMessage(message);
-    normalizedMessages.set(message, normalized);
-  }
-  return normalized;
-}
 
 function foundPreview(result: ReturnType<ReplyPreviewLookup>) {
   return result && !("pending" in result || "missing" in result || "oversized" in result)
@@ -129,8 +107,6 @@ function resolveTarget(
       sender: { ...sender, name },
       agentAvatar: preview?.agentAvatar,
       openId: id,
-      // A sender-only snapshot paints now; its lookup can still confirm a missing original.
-      ...(preview || snapshot?.text || oversized ? {} : { request: id }),
     };
   }
   if (preview || name) {
@@ -138,7 +114,6 @@ function resolveTarget(
   }
   return {
     state: result && "pending" in result && reserves ? "reserved" : "hidden",
-    request: id,
   };
 }
 
@@ -183,11 +158,11 @@ export function resolveGroupReplyLine(
   if (group.role !== "assistant") {
     return NO_REPLY_LINE;
   }
-  const targets = group.messages.map(({ message }) => normalizeReplyMessage(message).replyTarget);
+  const targets = group.messages.map(({ message }) => normalizeMessage(message).replyTarget);
   const explicit = targets.find((target) => target?.kind === "id");
   if (explicit?.kind === "id") {
     const previews = replyMessages
-      .map(({ message }) => normalizeReplyMessage(message))
+      .map(({ message }) => normalizeMessage(message))
       .filter(({ replyTarget }) => replyTarget?.kind === "id" && replyTarget.id === explicit.id)
       .map(({ replyPreview }) => replyPreview);
     // Prefer a snapshot that names its sender: the name alone paints the line.
@@ -201,7 +176,7 @@ export function resolveGroupReplyLine(
     // reply_to_current resolves only through the prompt that started this run,
     // never the latest prompt; in 1:1 its own turn's prompt adds nothing.
     const source = group.replyCurrentSource;
-    const sender = source && normalizeReplyMessage(source.message).sender;
+    const sender = source && normalizeMessage(source.message).sender;
     return source &&
       (sender || !group.replyShared) &&
       (group.replyShared || source.key !== group.replyTurnSource?.key)
@@ -212,78 +187,4 @@ export function resolveGroupReplyLine(
   return group.replyToSender
     ? resolveSource(group.replyToMessage?.message, group.replyToSender, lookup)
     : NO_REPLY_LINE;
-}
-
-type ReplyLineActions = {
-  onOpenReply?: (id: string) => void;
-  onResolveReply?: (id: string) => void;
-  replyNavigationId?: string | null;
-};
-
-/**
- * `inline` renders inside the message bubble; otherwise the line sits above
- * the message beside its avatar. The name navigates to any known original,
- * loaded or not; a missing one stays plain text.
- */
-export function renderReplyLine(
-  line: ReplyLine,
-  { onOpenReply, onResolveReply, replyNavigationId }: ReplyLineActions,
-  inline = false,
-) {
-  if (line.request) {
-    onResolveReply?.(line.request);
-  }
-  if (line.state === "hidden") {
-    return nothing;
-  }
-  const rowClass = `chat-reply-attribution chat-reply-attribution--${inline ? "inline" : "reply"}`;
-  const label = html`<span class="chat-reply-attribution__label"
-    >${inline ? nothing : html`<span class="chat-reply-attribution__mobile-icon" aria-hidden="true">${icons.cornerUpLeft}</span>`}${t("chat.messages.replyingToLabel")}</span
-  >`;
-  // An in-flight lookup keeps the row so the answer fills it in place.
-  if (line.state === "reserved") {
-    return html`<div class="${rowClass} chat-reply-attribution--pending" aria-hidden="true">
-      ${label}
-    </div>`;
-  }
-  const { name = "", openId } = line;
-  const named = line.state === "named";
-  const loading = Boolean(openId) && replyNavigationId === openId;
-  const person = html`
-    ${named ? renderChatAuthorAvatar(line.sender, undefined, line.agentAvatar) : nothing}
-    <span class="chat-reply-attribution__name" title=${name}>${name}</span>
-  `;
-  return html`<div class=${rowClass}>
-    ${label}
-    ${
-      named && openId && onOpenReply
-        ? html`<button
-            class="chat-reply-attribution__person chat-reply-attribution__target"
-            type="button"
-            aria-label=${t("chat.messages.replyingTo", { name })}
-            ?disabled=${loading}
-            aria-busy=${loading ? "true" : "false"}
-            @click=${() => onOpenReply(openId)}
-          >
-            ${person}
-          </button>`
-        : name
-          ? html`<span class="chat-reply-attribution__person">${person}</span>`
-          : nothing
-    }
-    ${
-      named
-        ? nothing
-        : html`<span class="chat-reply-attribution__unavailable"
-            >${t("chat.messages.replyOriginalUnavailable")}</span
-          >`
-    }
-  </div>`;
-}
-
-/** Beside an avatar, a shown line draws a connector from it. */
-export function renderReplyLineConnector(line: ReplyLine, avatar: unknown) {
-  return avatar !== nothing && (line.state === "named" || line.state === "unavailable")
-    ? renderReplyConnector()
-    : nothing;
 }

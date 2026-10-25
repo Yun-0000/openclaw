@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js";
 import type { ChannelPluginCatalogEntry } from "../../channels/plugins/catalog.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
+import { makeCatalogEntry, makeMeta } from "../../flows/channel-setup.test-helpers.js";
 import { createPluginRuntimeStore } from "../../plugin-sdk/runtime-store.js";
 
 const mocks = vi.hoisted(() => ({
@@ -48,21 +49,17 @@ function createCatalogEntry(params: {
   pluginId: string;
   origin?: "workspace" | "bundled";
 }): ChannelPluginCatalogEntry {
-  return {
-    id: params.id,
+  return makeCatalogEntry(params.id, "Telegram", {
     pluginId: params.pluginId,
     origin: params.origin,
-    meta: {
-      id: params.id,
-      label: "Telegram",
-      selectionLabel: "Telegram",
+    meta: makeMeta(params.id, "Telegram", {
       docsPath: "/channels/telegram",
       blurb: "Telegram channel",
-    },
+    }),
     install: {
       npmSpec: params.pluginId,
     },
-  };
+  });
 }
 
 function createPlugin(id: string): ChannelPlugin {
@@ -100,7 +97,7 @@ describe("resolveInstallableChannelPlugin", () => {
     const result = await resolveInstallableChannelPlugin({
       cfg: {
         agents: {
-          list: [{ id: "alpha" }, { id: "beta" }],
+          entries: { alpha: {}, beta: {} },
         },
       },
       runtime: {} as never,
@@ -115,7 +112,6 @@ describe("resolveInstallableChannelPlugin", () => {
       plugin: registeredPlugin,
       configChanged: false,
       pluginInstalled: false,
-      supportsRequestedCapability: true,
     });
     expect(mocks.resolveAgentWorkspaceDir).not.toHaveBeenCalled();
     expect(mocks.getLoadedChannelPlugin).toHaveBeenCalledWith("telegram");
@@ -131,7 +127,7 @@ describe("resolveInstallableChannelPlugin", () => {
       resolveInstallableChannelPlugin({
         cfg: {
           agents: {
-            list: [{ id: "alpha" }, { id: "beta" }],
+            entries: { alpha: {}, beta: {} },
           },
         },
         runtime: {} as never,
@@ -271,7 +267,6 @@ describe("resolveInstallableChannelPlugin", () => {
     ).resolves.toEqual({ cleared: true, loggedOut: true });
     expect(result.configChanged).toBe(false);
     expect(result.pluginInstalled).toBe(false);
-    expect(result.supportsRequestedCapability).toBe(true);
   });
 
   it("returns an existing plugin that lacks the requested capability without reinstalling", async () => {
@@ -295,7 +290,6 @@ describe("resolveInstallableChannelPlugin", () => {
 
     expect(result.plugin).toBe(installedPlugin);
     expect(result.pluginInstalled).toBe(false);
-    expect(result.supportsRequestedCapability).toBe(false);
     expect(mocks.ensureChannelSetupPluginInstalled).not.toHaveBeenCalled();
   });
 
@@ -323,7 +317,6 @@ describe("resolveInstallableChannelPlugin", () => {
 
     expect(result.plugin).toBe(scopedPlugin);
     expect(result.pluginInstalled).toBe(false);
-    expect(result.supportsRequestedCapability).toBe(false);
     expect(mocks.ensureChannelSetupPluginInstalled).not.toHaveBeenCalled();
   });
 
@@ -402,7 +395,6 @@ describe("resolveInstallableChannelPlugin", () => {
         catalogEntry: { ...entry, pluginId },
         configChanged: installed,
         pluginInstalled: installed,
-        supportsRequestedCapability: installed ? true : undefined,
       });
       expect(mocks.resolveAgentWorkspaceDir).toHaveBeenCalledTimes(1);
       expect(mocks.ensureChannelSetupPluginInstalled).toHaveBeenCalledWith(

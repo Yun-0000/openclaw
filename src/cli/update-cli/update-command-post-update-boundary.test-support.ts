@@ -12,6 +12,8 @@ import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js"
 import * as updateWriter from "../../infra/update-run-write.async.js";
 import { CommandProcessCleanupError } from "../../process/exec-result.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
+import * as postUpdateMaintenance from "./update-command-post-update-maintenance.js";
+import { registerServiceStartRefusalFinalizationTests } from "./update-command-post-update-runtime-refresh.test-support.js";
 import {
   createManagedServiceIdentityFixture,
   finishSuccessfulPackageSwitch,
@@ -27,6 +29,43 @@ import type {
 import * as serviceMaintenance from "./update-command-service-maintenance.js";
 import * as serviceOperations from "./update-command-service.js";
 
+function serviceFixture(root: string) {
+  return {
+    stopped: false,
+    inspected: true,
+    runtimeInspected: true,
+    running: true,
+    servicePid: 631,
+    serviceManagerUid: 1000,
+    serviceUpdateVerdict: {
+      kind: "owned" as const,
+      root,
+      fingerprint: "sealed",
+      refreshDefinition: false,
+    },
+  };
+}
+
+function mockSupervisedOwner() {
+  vi.spyOn(gatewayOwner, "readGatewayOwnerLease").mockReturnValue({
+    owner: "fixture-gateway",
+    pid: 631,
+    host: "fixture-host",
+    startedAt: 1,
+    state: "live",
+    expired: false,
+    mode: "supervised",
+    port: 18789,
+    supervisor: { kind: "systemd", name: "fixture-gateway" },
+  });
+}
+
+function expectNoCalls(...mocks: Mock[]) {
+  for (const mock of mocks) {
+    expect(mock).not.toHaveBeenCalled();
+  }
+}
+
 export function registerBoundaryFinalizationControls({
   makeTempDir,
   mocks,
@@ -35,8 +74,88 @@ export function registerBoundaryFinalizationControls({
   mocks: {
     readServiceState: Mock;
     restartService: Mock<typeof import("./update-command-service.js").maybeRestartService>;
+    printResult: Mock;
   };
 }) {
+  registerServiceStartRefusalFinalizationTests({ makeTempDir, mocks });
+
+  it.each(["confirmed", "unknown", "refused", "revoked"] as const)(
+    "settles progress before finalization and retains its failure (%s)",
+    async (outcome) => {
+      const entered = createDeferred();
+      const release = createDeferred();
+      const receiptFailure =
+        outcome === "unknown"
+          ? new CommandProcessCleanupError({ cause: new Error("receipt reply lost") })
+          : new Error("progress receipt refused");
+      const env = { OPENCLAW_STATE_DIR: makeTempDir("finalizer-progress-") };
+      const record = createUpdateRun({ trigger: "cli" }, { env });
+      let current = true;
+      const run = {
+        runId: record.runId,
+        env,
+        executorFence: { assertCurrent() {} },
+        ...(outcome === "revoked"
+          ? { requesterAuthority: { requester: {}, isCurrent: () => current } }
+          : {}),
+      };
+      const rollback = vi.spyOn(rollbackModule, "rollbackFailedUpdate");
+      const prepareService = vi.spyOn(postUpdateMaintenance, "preparePostUpdateService");
+      const finishing = finishSuccessfulPackageSwitch(
+        outcome === "revoked" ? { run } : {},
+        {},
+        {
+          beforeFinalization: async () => {
+            entered.resolve();
+            await release.promise;
+            if (outcome !== "confirmed") {
+              throw receiptFailure;
+            }
+          },
+        },
+      );
+      try {
+        await Promise.race([
+          entered.promise,
+          finishing.then(() => {
+            throw new Error("Finalization completed before progress settlement entered.");
+          }),
+        ]);
+        expectNoCalls(mocks.readServiceState, prepareService, mocks.restartService, rollback);
+        current = outcome !== "revoked";
+        release.resolve();
+        if (outcome === "confirmed") {
+          await finishing;
+          expect(prepareService).toHaveBeenCalledOnce();
+          expect(mocks.restartService).toHaveBeenCalledOnce();
+        } else if (outcome === "unknown") {
+          await expect(finishing).rejects.toBe(receiptFailure);
+        } else if (outcome === "refused") {
+          await expect(finishing).rejects.toMatchObject({
+            result: {
+              status: "error",
+              steps: expect.arrayContaining([
+                expect.objectContaining({ stderrTail: receiptFailure.message }),
+              ]),
+            },
+            cause: receiptFailure,
+          });
+        } else {
+          await expect(finishing).rejects.toMatchObject({
+            errors: [expect.objectContaining({ message: "requester-revoked" }), receiptFailure],
+          });
+          expect(getUpdateRun(record.runId, { env })?.status).toBe("running");
+        }
+        if (outcome !== "confirmed") {
+          expectNoCalls(prepareService, mocks.readServiceState, mocks.restartService, rollback);
+        }
+      } finally {
+        release.resolve();
+        await finishing.catch(() => undefined);
+      }
+    },
+  );
+
   it
     .runIf(process.platform !== "win32")
     .each([
@@ -55,31 +174,11 @@ export function registerBoundaryFinalizationControls({
     vi.stubEnv("OPENCLAW_STATE_DIR", path.join(home, ".openclaw"));
     const env = { ...process.env };
     const run = createUpdateRun({ trigger: "cli" }, { env });
-    vi.spyOn(gatewayOwner, "readGatewayOwnerLease").mockReturnValue({
-      owner: "fixture-gateway",
-      pid: 631,
-      host: "fixture-host",
-      startedAt: 1,
-      state: "live",
-      expired: false,
-      mode: "supervised",
-      port: 18789,
-      supervisor: { kind: "systemd", name: "fixture-gateway" },
-    });
+    mockSupervisedOwner();
     const stopped: PreManagedServiceStop = {
+      ...serviceFixture(home),
       stopped: true,
-      inspected: true,
-      runtimeInspected: true,
-      running: true,
       stoppedAtMs: 7,
-      servicePid: 631,
-      serviceManagerUid: 1000,
-      serviceUpdateVerdict: {
-        kind: "owned",
-        root: home,
-        fingerprint: "sealed",
-        refreshDefinition: false,
-      },
     };
     const failure =
       scenario === "cleanup-uncertain"
@@ -252,19 +351,8 @@ export function registerBoundaryFinalizationControls({
           ? new GatewayServiceAuthorityError(new Error("native authority revoked"))
           : new Error("native verification failed after stop");
       const originalService = {
-        stopped: false,
-        inspected: true,
-        runtimeInspected: true,
-        running: true,
-        servicePid: 631,
-        serviceManagerUid: 1000,
+        ...serviceFixture("/tmp/openclaw-update"),
         serviceEnv: env,
-        serviceUpdateVerdict: {
-          kind: "owned" as const,
-          root: "/tmp/openclaw-update",
-          fingerprint: "sealed",
-          refreshDefinition: false,
-        },
       };
       const legacy =
         scenario === "legacy-stopped" ||
@@ -281,17 +369,7 @@ export function registerBoundaryFinalizationControls({
             serviceUpdateVerdict: { kind: "unavailable", message: "legacy inspection unavailable" },
           }
         : originalService;
-      vi.spyOn(gatewayOwner, "readGatewayOwnerLease").mockReturnValue({
-        owner: "fixture-gateway",
-        pid: 631,
-        host: "fixture-host",
-        startedAt: 1,
-        state: "live",
-        expired: false,
-        mode: "supervised",
-        port: 18789,
-        supervisor: { kind: "systemd", name: "fixture-gateway" },
-      });
+      mockSupervisedOwner();
       const inspect = vi
         .spyOn(serviceMaintenance, "maybeStopManagedServiceBeforeMutableUpdate")
         .mockImplementation(async (params) => {
@@ -439,8 +517,7 @@ export function registerBoundaryFinalizationControls({
           } else {
             expect(failure).toBe(stopFailure);
           }
-          expect(recover).not.toHaveBeenCalled();
-          expect(mocks.restartService).not.toHaveBeenCalled();
+          expectNoCalls(recover, mocks.restartService);
           expect(running).toBe(false);
         } else if (
           scenario === "inspection-unavailable" ||
@@ -452,8 +529,7 @@ export function registerBoundaryFinalizationControls({
             result: { status: "error", recovery: { serviceRestartSafe: false } },
             ...(scenario === "inspection-threw" ? { cause: { cause: stopFailure } } : {}),
           });
-          expect(recover).not.toHaveBeenCalled();
-          expect(mocks.restartService).not.toHaveBeenCalled();
+          expectNoCalls(recover, mocks.restartService);
           expect(running).toBe(false);
         } else if (scenario === "failed-uninspected") {
           await expect(finishing).rejects.toMatchObject({ name: "UpdateCommandFailure" });

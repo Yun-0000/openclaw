@@ -14,16 +14,14 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
-import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 import { SessionManager } from "./session-manager.js";
+import { cleanupTrackedSessionState } from "./session-state-cleanup.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
-    for (const stateDir of dirs.dirs) {
-      await cleanupSessionStateForTest({ stateDir });
-    }
-    cleanup();
+    await cleanupTrackedSessionState(dirs.dirs, cleanup);
   }),
 );
 async function fixture(data: unknown, prefixEntries = 0) {
@@ -179,9 +177,10 @@ describe("bounded cleanup retaining opaque custom data", () => {
   });
   it("keeps unchanged-prefix IDs out of a tiny suffix query", async () => {
     const f = await fixture({ retained: true }, 40);
-    const prepare = f.database.db.prepare.bind(f.database.db);
+    const db = requireNativeSqliteDatabase(f.database.db);
+    const prepare = db.prepare.bind(db);
     let maxParameters = 0;
-    const spy = vi.spyOn(f.database.db, "prepare").mockImplementation((query) => {
+    const spy = vi.spyOn(db, "prepare").mockImplementation((query) => {
       maxParameters = Math.max(maxParameters, query.match(/\?/g)?.length ?? 0);
       return prepare(query);
     });

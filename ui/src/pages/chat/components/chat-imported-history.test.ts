@@ -1,30 +1,132 @@
-import { nothing, render } from "lit";
+import { createComponent } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  catalogDisplayFacts,
+  catalogItemTextPrefix,
+  projectCatalogItemForDisplay,
+  projectImportedMessageForDisplay,
+  projectPreservedCatalogMessageForDisplay,
+} from "../../../../../src/chat/session-catalog-display.js";
 import { wrapExternalContent } from "../../../../../src/security/external-content.js";
-import { projectImportedMessageForDisplay } from "../../../lib/chat/imported-message-display.ts";
+import { i18n } from "../../../i18n/index.ts";
 import { resolveMessageDisplayMarkdown } from "../../../lib/chat/message-display.ts";
 import { extractText, extractTextCached } from "../../../lib/chat/message-extract.ts";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
-import { renderGroupedMessage } from "./chat-message-bubble.ts";
+import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { coalesceToolActivityMessages } from "../chat-tool-activity-coalesce.ts";
+import { GroupedMessage } from "./chat-message-bubble-view.tsx";
 import {
   prepareChatMessageRender,
-  renderMessageActionButtons,
+  MessageActions,
   resolveMessageActionDetails,
-} from "./chat-message-markdown.ts";
+} from "./chat-message-markdown-view.tsx";
+import { ChatToolOutput } from "./chat-tool-output-view.tsx";
 
 const importKey = "example-catalog:thread:item";
 const wrap = (text: string) =>
   wrapExternalContent(text, { source: "unknown", includeWarning: false }).trim();
 const container = document.createElement("div");
+let root: ReturnType<typeof mountSolid> | undefined;
 
 afterEach(() => {
-  render(nothing, container);
+  root?.unmount();
+  root = undefined;
   vi.unstubAllGlobals();
 });
 
 function displayed(message: unknown) {
   return resolveMessageDisplayMarkdown(message, normalizeMessage(message));
 }
+
+it("localizes catalog truncation in retained browse/import views and the open output panel", async () => {
+  const messages = [
+    {
+      id: "tool",
+      type: "toolResult" as const,
+      toolName: "bash",
+      toolCallId: "tool",
+      text: "literal [Output truncated]\n" + "x".repeat(600),
+      isError: false,
+      exitCode: 0,
+      truncated: true,
+    },
+    { id: "reasoning", type: "reasoning" as const, text: "", truncated: true },
+    { id: "answer", type: "agentMessage" as const, text: "Partial answer", truncated: true },
+  ].flatMap((item) => {
+    const projected: unknown[] = [projectCatalogItemForDisplay(item)];
+    projected.push(
+      ...projectPreservedCatalogMessageForDisplay({
+        role: "assistant",
+        content: [{ type: "text", text: catalogItemTextPrefix(item.type) + wrap(item.text) }],
+        __openclaw: { catalogDisplay: catalogDisplayFacts(item) },
+      }),
+    );
+    if (item.type !== "toolResult") {
+      return projected;
+    }
+    // The call owns the grouped row; only its separate result is truncated.
+    return projected.flatMap((message, index) =>
+      coalesceToolActivityMessages([
+        {
+          kind: "message",
+          key: `call-${index}`,
+          message: projectCatalogItemForDisplay({
+            type: "toolCall",
+            toolName: "bash",
+            toolCallId: "tool",
+            toolInput: { command: "check" },
+          }),
+        },
+        { kind: "message", key: `result-${index}`, message },
+      ]).flatMap((row) => (row.kind === "message" ? [row.message] : [])),
+    );
+  });
+  const original = structuredClone(messages);
+  const card = extractToolCardsCached(messages[0])[0];
+  if (!card) {
+    throw new Error("Missing catalog tool card");
+  }
+  root = mountSolid(
+    () => [
+      ...messages.map((message, index) =>
+        createComponent(GroupedMessage, {
+          preparation: prepareChatMessageRender(message),
+          messageKey: `catalog-${index}`,
+          options: {
+            isStreaming: false,
+            showReasoning: true,
+            isToolMessageExpanded: () => true,
+            isToolExpanded: () => true,
+          },
+        }),
+      ),
+      createComponent(ChatToolOutput, { content: { kind: "tool-output", card } }),
+    ],
+    { container },
+  );
+  try {
+    for (const [locale, notice] of [
+      ["fr", "[Sortie tronquée]"],
+      ["de", "[Ausgabe gekürzt]"],
+      ["en", "[Output truncated]"],
+    ] as const) {
+      await i18n.setLocale(locale);
+      await vi.waitFor(() =>
+        expect(
+          Array.from(container.querySelectorAll('p[role="status"]'), (node) => node.textContent),
+        ).toEqual(Array(7).fill(notice)),
+      );
+      expect(container.querySelectorAll(".chat-thinking")).toHaveLength(2);
+      expect(container.querySelector(".chat-tool-output__text")?.textContent).toContain(
+        "literal [Output truncated]",
+      );
+      expect(messages).toEqual(original);
+    }
+  } finally {
+    await i18n.setLocale("en");
+  }
+});
 
 describe.each(["user", "assistant"])("imported %s history presentation", (role) => {
   it.each(["string", "blocks", "text"])(
@@ -64,12 +166,14 @@ describe.each(["user", "assistant"])("imported %s history presentation", (role) 
   it("renders the body as Markdown and uses it for reply and copy actions", async () => {
     const body = "Imported **answer**\n\n~~~ts\nconst answer = 42;\n~~~";
     const message = { role, content: wrap(body), __openclaw: { idempotencyKey: importKey } };
-    render(
-      renderGroupedMessage(prepareChatMessageRender(message), "imported", {
-        isStreaming: false,
-        showReasoning: false,
-      }),
-      container,
+    root = mountSolid(
+      () =>
+        createComponent(GroupedMessage, {
+          preparation: prepareChatMessageRender(message),
+          messageKey: "imported",
+          options: { isStreaming: false, showReasoning: false },
+        }),
+      { container },
     );
     expect(container.querySelector(".chat-text strong")?.textContent).toBe("answer");
     expect(container.querySelector("pre code")?.textContent?.trimEnd()).toBe("const answer = 42;");
@@ -87,7 +191,10 @@ describe.each(["user", "assistant"])("imported %s history presentation", (role) 
       const writeText = vi.fn().mockResolvedValue(undefined);
       vi.stubGlobal("navigator", { clipboard: { writeText } });
       expect(details?.markdown).toBe(body);
-      render(renderMessageActionButtons(details!, { onReply }), container);
+      root.unmount();
+      root = mountSolid(() => createComponent(MessageActions, { details, options: { onReply } }), {
+        container,
+      });
       container.querySelector<HTMLButtonElement>(".chat-copy-btn")!.click();
       await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith(body));
     }
@@ -138,6 +245,12 @@ describe("imported history framing", () => {
       const content = prefix + framed;
       const message = { role, content, __openclaw: { idempotencyKey: importKey } };
       expect(projectImportedMessageForDisplay(message)).toEqual(message);
+      expect(
+        projectPreservedCatalogMessageForDisplay({
+          ...message,
+          __openclaw: { catalogDisplay: { type: "agentMessage" } },
+        }),
+      ).toMatchObject([{ content: [{ type: "text", text: content }] }]);
       // Assistant display removes leading blank lines, without unwrapping an ineligible frame.
       expect(displayed(message)).toBe(prefix === "\n" || prefix === "\r\n" ? framed : content);
       expect(extractText(message)).toContain("EXTERNAL_UNTRUSTED_CONTENT");

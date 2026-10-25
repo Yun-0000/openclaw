@@ -1,10 +1,10 @@
-// Doctor install tests cover install checks, repair notes, and binary/package diagnostics.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { noteSourceInstallIssues } from "./doctor-install.js";
+import { MACOS_APP_INSTALL_OWNER_MARKER } from "./test-runtime-config-helpers.js";
 
 vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note: vi.fn(),
@@ -24,16 +24,7 @@ describe("noteSourceInstallIssues", () => {
   it("reports the host owner instead of source package repair advice", async () => {
     await withTestDir({ prefix: "openclaw-doctor-install-host-" }, async (root) => {
       await writeSourceCheckout(root, "overrides: {openclaw: 'link:.'}\n");
-      await writeFile(
-        root,
-        "openclaw-install-owner.json",
-        JSON.stringify({
-          schemaVersion: 1,
-          owner: "macos-app",
-          displayName: "OpenClaw.app",
-          updateHint: "Update OpenClaw.app to update this Gateway.",
-        }),
-      );
+      await writeFile(root, "openclaw-install-owner.json", MACOS_APP_INSTALL_OWNER_MARKER);
 
       await noteSourceInstallIssues(root);
 
@@ -41,17 +32,6 @@ describe("noteSourceInstallIssues", () => {
         "Managed by OpenClaw.app. Update OpenClaw.app to update this Gateway.",
         "Install",
       );
-    });
-  });
-
-  it("does not treat a packaged workspace config as a source checkout", async () => {
-    await withTestDir({ prefix: "openclaw-doctor-install-" }, async (root) => {
-      await fs.mkdir(path.join(root, "node_modules"), { recursive: true });
-      await writeFile(root, "pnpm-workspace.yaml", "packages:\n  - .\n");
-
-      await noteSourceInstallIssues(root);
-
-      expect(note).not.toHaveBeenCalled();
     });
   });
 
@@ -86,43 +66,46 @@ describe("source self-link recovery", () => {
   beforeEach(() => vi.mocked(note).mockReset());
 
   it.each([
-    ["block map", "overrides:\n  openclaw: 'link:'\n"],
-    ["scalar alias", "self: &self 'link:.'\noverrides: {openclaw: *self}\n"],
-    ["map alias", "pins: &pins {openclaw: 'link:.'}\noverrides: *pins\n"],
-    ["flow map", "overrides: { openclaw: 'link:.' }\n"],
-    ["quoted keys", '"overrides":\n  "openclaw": "link:."\n'],
-    ["commented header", "overrides: # pinned packages\n  openclaw: 'link:.'\n"],
-    ["blank line", "overrides:\n  example: 1.0.0\n\n  openclaw: 'link:.'\n"],
-    ["CRLF", "overrides:\r\n  openclaw: 'link:.'\r\n"],
-  ])("recognizes valid %s overrides", async (_name, workspace) => {
-    await withTestDir({ prefix: "openclaw-doctor-self-link-" }, async (root) => {
-      await writeSourceCheckout(root, workspace);
-      await noteSourceInstallIssues(root);
-      expect(note).toHaveBeenCalledExactlyOnceWith(
-        expect.stringContaining("pnpm-workspace.yaml contains a self-referential"),
-        "Install",
-      );
-    });
-  });
-
-  it.each([
-    ["non-overrides map", "catalog:\n  openclaw: 'link:.'\n"],
-    ["nested overrides value", "overrides:\n  example:\n    openclaw: 'link:.'\n"],
-    ["comment", "# overrides: {openclaw: 'link:.'}\n"],
-    ["normal override", "overrides:\n  openclaw: 2026.9.4\n"],
-    ["non-string override", "overrides:\n  openclaw: [link]\n"],
-    ["unquoted trailing colon", "overrides:\n  openclaw: link:\n"],
-    ["duplicate key", "overrides:\n  openclaw: 'link:.'\n  openclaw: 2026.9.4\n"],
-    ["malformed YAML", "overrides: [\n"],
-    [
-      "excessive alias expansion",
-      "a: &a [x, x, x, x, x, x, x, x, x, x]\nb: &b [*a, *a, *a, *a, *a, *a, *a, *a, *a, *a]\nc: [*b, *b, *b, *b, *b, *b, *b, *b, *b, *b]\noverrides: {openclaw: 'link:.'}\n",
-    ],
-  ])("does not report a self-link for %s", async (_name, workspace) => {
+    ...(
+      [
+        ["block map", "overrides:\n  openclaw: 'link:'\n"],
+        ["scalar alias", "self: &self 'link:.'\noverrides: {openclaw: *self}\n"],
+        ["map alias", "pins: &pins {openclaw: 'link:.'}\noverrides: *pins\n"],
+        ["flow map", "overrides: { openclaw: 'link:.' }\n"],
+        ["quoted keys", '"overrides":\n  "openclaw": "link:."\n'],
+        ["commented header", "overrides: # pinned packages\n  openclaw: 'link:.'\n"],
+        ["blank line", "overrides:\n  example: 1.0.0\n\n  openclaw: 'link:.'\n"],
+        ["CRLF", "overrides:\r\n  openclaw: 'link:.'\r\n"],
+      ] as const
+    ).map(([name, workspace]) => ({ name, workspace, selfLink: true })),
+    ...(
+      [
+        ["non-overrides map", "catalog:\n  openclaw: 'link:.'\n"],
+        ["nested overrides value", "overrides:\n  example:\n    openclaw: 'link:.'\n"],
+        ["comment", "# overrides: {openclaw: 'link:.'}\n"],
+        ["normal override", "overrides:\n  openclaw: 2026.9.4\n"],
+        ["non-string override", "overrides:\n  openclaw: [link]\n"],
+        ["unquoted trailing colon", "overrides:\n  openclaw: link:\n"],
+        ["duplicate key", "overrides:\n  openclaw: 'link:.'\n  openclaw: 2026.9.4\n"],
+        ["malformed YAML", "overrides: [\n"],
+        [
+          "excessive alias expansion",
+          "a: &a [x, x, x, x, x, x, x, x, x, x]\nb: &b [*a, *a, *a, *a, *a, *a, *a, *a, *a, *a]\nc: [*b, *b, *b, *b, *b, *b, *b, *b, *b, *b]\noverrides: {openclaw: 'link:.'}\n",
+        ],
+      ] as const
+    ).map(([name, workspace]) => ({ name, workspace, selfLink: false })),
+  ])("checks workspace self-links in $name", async ({ workspace, selfLink }) => {
     await withTestDir({ prefix: "openclaw-doctor-self-link-" }, async (root) => {
       await writeSourceCheckout(root, workspace);
       await expect(noteSourceInstallIssues(root)).resolves.toBeUndefined();
-      expect(note).not.toHaveBeenCalled();
+      if (selfLink) {
+        expect(note).toHaveBeenCalledExactlyOnceWith(
+          expect.stringContaining("pnpm-workspace.yaml contains a self-referential"),
+          "Install",
+        );
+      } else {
+        expect(note).not.toHaveBeenCalled();
+      }
     });
   });
 
@@ -150,29 +133,21 @@ describe("source self-link recovery", () => {
     },
   );
 
-  it("continues other checks when the workspace cannot be read", async () => {
-    await withTestDir({ prefix: "openclaw-doctor-self-link-" }, async (root) => {
-      await writeSourceCheckout(root, "");
-      await fs.rm(path.join(root, "pnpm-workspace.yaml"));
-      await fs.mkdir(path.join(root, "pnpm-workspace.yaml"));
-      await writeFile(root, "package-lock.json", "{}");
-      await expect(noteSourceInstallIssues(root)).resolves.toBeUndefined();
-      expect(note).toHaveBeenCalledExactlyOnceWith(
-        expect.stringContaining("package-lock.json present"),
-        "Install",
-      );
-    });
-  });
-
-  it("continues workspace checks when package.json is malformed", async () => {
+  it.each([
+    { failure: "unreadable workspace", warning: "package-lock.json present" },
+    { failure: "malformed manifest", warning: "pnpm-workspace.yaml contains" },
+  ])("continues other install checks after $failure", async ({ failure, warning }) => {
     await withTestDir({ prefix: "openclaw-doctor-self-link-" }, async (root) => {
       await writeSourceCheckout(root, "overrides: {openclaw: 'link:.'}\n");
-      await writeFile(root, "package.json", "{");
+      if (failure === "unreadable workspace") {
+        await fs.rm(path.join(root, "pnpm-workspace.yaml"));
+        await fs.mkdir(path.join(root, "pnpm-workspace.yaml"));
+        await writeFile(root, "package-lock.json", "{}");
+      } else {
+        await writeFile(root, "package.json", "{");
+      }
       await expect(noteSourceInstallIssues(root)).resolves.toBeUndefined();
-      expect(note).toHaveBeenCalledExactlyOnceWith(
-        expect.stringContaining("pnpm-workspace.yaml contains"),
-        "Install",
-      );
+      expect(note).toHaveBeenCalledExactlyOnceWith(expect.stringContaining(warning), "Install");
     });
   });
 

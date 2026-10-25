@@ -1,4 +1,5 @@
 // Gateway-owned GPT-Live bridge over released WebRTC and unlisted direct transport.
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
 import type {
   RealtimeVoiceAudioOutputPort,
@@ -7,10 +8,11 @@ import type {
   RealtimeVoiceCloseDisposition,
   RealtimeVoiceCloseOptions,
 } from "openclaw/plugin-sdk/realtime-voice";
-import WebSocket from "ws";
+import { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import type { OpenAIRealtimeHost } from "./realtime-host.js";
 import {
   assertOpenAIQuicksilverPcmOutput,
+  closeOpenAIQuicksilverAudioOutput,
   OpenAIQuicksilverAudioAdapter,
   OpenAIQuicksilverPendingAudio,
 } from "./realtime-quicksilver-audio-buffer.js";
@@ -98,7 +100,6 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
   private delegations: OpenAIQuicksilverDelegationController | undefined;
   private connected = false;
   private closed = false;
-  private closeNotified = false;
   private closingPromise: Promise<void> | undefined;
   private closeReason: "completed" | "error" = "completed";
   private providerSessionClosed = false;
@@ -129,17 +130,8 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
     if (this.connectPromise || this.closed) {
       throw new Error("GPT-Live audio output must be configured before connecting");
     }
-    this.closeAudioOutput();
+    this.audioOutput = closeOpenAIQuicksilverAudioOutput(this.audioOutput);
     this.audioOutput = output;
-  }
-
-  private closeAudioOutput(): void {
-    if (!this.audioOutput) {
-      return;
-    }
-    Atomics.store(new Int32Array(this.audioOutput.state), 0, 1);
-    this.audioOutput.port.close();
-    this.audioOutput = undefined;
   }
 
   connect(): Promise<void> {
@@ -147,7 +139,7 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
       return Promise.reject(new Error("GPT-Live gateway relay bridge is closed"));
     }
     this.connectPromise ??= this.connectInternal().catch((error: unknown) => {
-      this.closeAudioOutput();
+      this.audioOutput = closeOpenAIQuicksilverAudioOutput(this.audioOutput);
       throw error;
     });
     return this.connectPromise;
@@ -256,12 +248,9 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
     connectSignal: AbortSignal,
   ): Promise<void> {
     this.transport = "direct";
-    let resolveReady!: () => void;
-    const readyPromise = new Promise<void>((resolve) => {
-      resolveReady = resolve;
-    });
+    const ready = createDeferred();
     this.delegations = this.createDelegationController({
-      onSessionStarted: resolveReady,
+      onSessionStarted: ready.resolve,
     });
     await this.connectSocket(
       auth,
@@ -280,7 +269,7 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
         voice: this.config.voice,
       }),
     );
-    await waitForOpenAIQuicksilverConnectStep(readyPromise, connectSignal);
+    await waitForOpenAIQuicksilverConnectStep(ready.promise, connectSignal);
   }
 
   private async connectWebRtc(
@@ -570,7 +559,7 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
       return this.closingPromise;
     }
     this.closed = true;
-    this.closeAudioOutput();
+    this.audioOutput = closeOpenAIQuicksilverAudioOutput(this.audioOutput);
     this.directSocket?.stopAudio();
     this.closeReason = reason;
     const socket = this.sideband;
@@ -586,10 +575,6 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
       if (this.timer) {
         clearTimeout(this.timer);
         this.timer = undefined;
-      }
-      if (this.providerSessionClosed) {
-        this.finishClose(disposition, beforeClose);
-        return;
       }
       this.closingPromise = closeOpenAILiveSocket(socket)
         .then((receiptReason) => {
@@ -620,16 +605,13 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
       try {
         beforeClose?.();
       } finally {
-        if (!this.closeNotified) {
-          this.closeNotified = true;
-          this.config.onClose?.(this.closeReason);
-        }
+        this.config.onClose?.(this.closeReason);
       }
     }
   }
 
   private releaseResources(disposition: RealtimeVoiceCloseDisposition): void {
-    this.closeAudioOutput();
+    this.audioOutput = closeOpenAIQuicksilverAudioOutput(this.audioOutput);
     this.directSocket?.stopAudio();
     releaseOpenAIQuicksilverSession(this);
     this.connected = false;

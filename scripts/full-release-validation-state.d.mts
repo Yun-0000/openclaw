@@ -10,10 +10,8 @@ export function readChild(
   previous: ReleaseRecord | undefined,
   signal?: AbortSignal,
   options?: {
-    parentRunId?: string;
-    parentRunAttempt?: number;
-    targetSha?: string;
-    loadFlakeClassifications?: typeof import("./full-release-flake-classification.mjs").loadFlakeClassifications;
+    targetVersion?: string;
+    readJobLog?: (jobId: number) => string | Promise<string>;
     reuseSelection?: { runAttempt: number };
     readAttemptJobs?: (
       runId: string,

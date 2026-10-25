@@ -29,12 +29,14 @@ export type ResolvedMemorySearchConfig = Omit<
   | "local"
   | "outputDimensionality"
   | "queryInputType"
+  | "queryInstruction"
   | "remote"
   | "store"
   | "sync"
 > & {
   inputType?: string;
   queryInputType?: string;
+  queryInstruction?: string;
   documentInputType?: string;
   outputDimensionality?: number;
   cache: Omit<ProducedMemorySearchConfig["cache"], "maxEntries"> & { maxEntries?: number };
@@ -45,6 +47,7 @@ export type ResolvedMemorySearchConfig = Omit<
   };
   remote?: Omit<Partial<NonNullable<ProducedMemorySearchConfig["remote"]>>, "batch"> & {
     batch?: NonNullable<ProducedMemorySearchConfig["remote"]>["batch"];
+    /** @deprecated Ignored; retained for SDK source compatibility until the next major. */
     nonBatchConcurrency?: number;
   };
   store: Omit<ProducedMemorySearchConfig["store"], "vector"> & {
@@ -69,6 +72,11 @@ const DEFAULT_CACHE_ENABLED = true;
 const DEFAULT_CACHE_MAX_ENTRIES = 50_000;
 const DEFAULT_MEMORY_EMBEDDING_PROVIDER = "openai";
 
+export function resolveMemorySearchProviderId(provider?: string): string {
+  const configured = provider?.trim();
+  return configured && configured !== "auto" ? configured : DEFAULT_MEMORY_EMBEDDING_PROVIDER;
+}
+
 function getConfiguredMemoryEmbeddingProvider(providerId: string, cfg: OpenClawConfig) {
   // `none` is the built-in FTS-only sentinel, never a plugin capability.
   // Avoid cold plugin discovery when semantic memory is intentionally disabled.
@@ -91,7 +99,7 @@ export function resolveMemorySearchIndexConfig(cfg: OpenClawConfig, agentId: str
   const configuredSessionMemory =
     overrides?.experimental?.sessionMemory ?? defaults?.experimental?.sessionMemory ?? false;
   const configuredSources = overrides?.sources ?? defaults?.sources;
-  const { sessionMemory, searchSources, sources } = resolveMemorySearchSourcePolicy({
+  const { sessionMemory, ...sourcePolicy } = resolveMemorySearchSourcePolicy({
     configuredSources,
     rememberAcrossConversations,
     configuredSessionMemory,
@@ -99,8 +107,7 @@ export function resolveMemorySearchIndexConfig(cfg: OpenClawConfig, agentId: str
   return {
     enabled,
     rememberAcrossConversations,
-    sources,
-    searchSources,
+    ...sourcePolicy,
     extraPaths: normalizeConfiguredMemoryExtraPaths([
       ...(defaults?.extraPaths ?? []),
       ...(overrides?.extraPaths ?? []),
@@ -134,11 +141,7 @@ function produceMemorySearchConfig(cfg: OpenClawConfig, agentId: string) {
   }
   const defaults = cfg.memory?.search;
   const overrides = resolveAgentConfig(cfg, agentId)?.memory?.search;
-  const rawProvider = overrides?.provider ?? defaults?.provider;
-  const provider =
-    rawProvider?.trim() === "auto"
-      ? DEFAULT_MEMORY_EMBEDDING_PROVIDER
-      : rawProvider?.trim() || DEFAULT_MEMORY_EMBEDDING_PROVIDER;
+  const provider = resolveMemorySearchProviderId(overrides?.provider ?? defaults?.provider);
   const primaryAdapter = getConfiguredMemoryEmbeddingProvider(provider, cfg);
   const defaultRemote = defaults?.remote;
   const overrideRemote = overrides?.remote;
@@ -147,14 +150,8 @@ function produceMemorySearchConfig(cfg: OpenClawConfig, agentId: string) {
     normalizeProviderId(provider) !== "none" && fallback && fallback !== "none"
       ? getConfiguredMemoryEmbeddingProvider(fallback, cfg)
       : undefined;
-  const hasRemoteConfig = Boolean(
-    overrideRemote?.baseUrl ||
-    overrideRemote?.apiKey ||
-    overrideRemote?.headers ||
-    defaultRemote?.baseUrl ||
-    defaultRemote?.apiKey ||
-    defaultRemote?.headers ||
-    false,
+  const hasRemoteConfig = [overrideRemote, defaultRemote].some(
+    (remote) => remote?.baseUrl || remote?.apiKey || remote?.headers,
   );
   const includeRemote =
     hasRemoteConfig ||
@@ -195,6 +192,7 @@ function produceMemorySearchConfig(cfg: OpenClawConfig, agentId: string) {
     model,
     inputType,
     queryInputType,
+    queryInstruction: (overrides?.queryInstruction ?? defaults?.queryInstruction) || undefined,
     documentInputType,
     outputDimensionality,
     local: { modelPath: overrides?.local?.modelPath ?? defaults?.local?.modelPath },

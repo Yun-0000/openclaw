@@ -7,6 +7,7 @@ import {
   type OpenClawTestInstance,
 } from "../../test/helpers/openclaw-test-instance.js";
 import { runQaGatewayTestFixture } from "../../test/helpers/qa-gateway-test-lifetime.js";
+import { modelDefinition } from "../agents/model-auth.fixtures.test-support.js";
 import { stateDirGatewayFixtureEntrypoint } from "../cli/cli-entrypoint.test-support.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { connectGatewayClient, disconnectGatewayClient } from "./test-helpers.e2e.js";
@@ -25,6 +26,7 @@ type ChatMessage = {
   role: string;
   stopReason?: string;
   content: unknown;
+  openclawRunError?: { runId: string; summary: string };
 };
 
 it(
@@ -139,7 +141,7 @@ it(
               skipBootstrap: true,
               model: { primary: "stream-fixture/stream-fixture" },
             },
-            entries: { main: { default: true } },
+            entries: { main: {} },
           },
           models: {
             mode: "replace",
@@ -149,16 +151,13 @@ it(
                 apiKey: "local-fixture-key",
                 api: "anthropic-messages",
                 models: [
-                  {
-                    id: "stream-fixture",
+                  modelDefinition("stream-fixture", {
                     name: "Stream fixture",
                     api: "anthropic-messages",
                     reasoning: false,
-                    input: ["text"],
-                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
                     contextWindow: 200_000,
                     maxTokens: 4096,
-                  },
+                  }),
                 ],
               },
             },
@@ -215,7 +214,25 @@ it(
           );
           if (scenario.startsWith("started") || scenario.startsWith("sealed")) {
             expect.soft(waited.status, scenario).toBe("error");
-            expect.soft(assistant?.stopReason, scenario).toBe("error");
+            expect
+              .soft(
+                history.messages.filter(
+                  (message) => message.openclawRunError?.runId === started.runId,
+                ),
+                scenario,
+              )
+              .toEqual([
+                expect.objectContaining({
+                  role: "custom",
+                  openclawRunError: {
+                    runId: started.runId,
+                    summary: expect.stringMatching(/\S/),
+                  },
+                }),
+              ]);
+            if (scenario.endsWith("text")) {
+              expect.soft(JSON.stringify(assistant?.content), scenario).toContain("Partial answer");
+            }
             expect.soft(toolResults, scenario).toHaveLength(0);
             expect.soft(events, scenario).toContainEqual(
               expect.objectContaining({

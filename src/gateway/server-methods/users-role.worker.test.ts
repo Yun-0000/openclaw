@@ -4,20 +4,18 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resetGatewayWorkAdmission } from "../../process/gateway-work-admission.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import {
-  readUserProfileIdentity,
-  retainUserProfileCatalog,
+  readResidentUserProfileIdentity,
+  prepareUserProfileCatalog,
 } from "../../state/user-profile-list.js";
-import {
-  ensureProfileForEmail,
-  getUserProfileRole,
-  setUserProfileRole,
-} from "../../state/user-profiles.js";
+import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { resolveOperatorRolePolicyForProfile } from "../operator-role-policy.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { createGatewayRequestContext } from "../server-request-context.js";
 import { makeContextParams } from "../server-request-context.test-support.js";
 import { SharedGatewaySessionGenerationState } from "../server-shared-auth-generation.js";
+import { dispatchProfile } from "../server/client-fixtures.test-support.js";
 import { GatewayClientRegistry } from "../server/client-registry.js";
 import {
   createDispatchTestHarness,
@@ -83,13 +81,7 @@ function profileClient(
 ): GatewayWsClient {
   return {
     ...createOperatorWsClient({ connId, socket: { close } }),
-    authenticatedUserProfile: {
-      profileId,
-      displayName: null,
-      avatarRevision: "1",
-      hasAvatar: false,
-      updatedAt: 1,
-    },
+    authenticatedUserProfile: dispatchProfile(profileId),
   };
 }
 
@@ -99,6 +91,7 @@ it.each(["failed delivery", "self downgrade"] as const)(
     const state = await createOpenClawTestState({
       layout: "state-only",
       prefix: "users-role-delivery-",
+      prepareProfileCatalog: true,
     });
     let release = () => {};
     try {
@@ -107,10 +100,10 @@ it.each(["failed delivery", "self downgrade"] as const)(
       const target = ensureProfileForEmail("reader@example.test");
       setUserProfileRole(target.id, "administrator");
       const changed = scenario === "self downgrade" ? requester : target;
+      release = (await prepareUserProfileCatalog()).release;
       expect(resolveOperatorRolePolicyForProfile(changed.id, roleConfig())?.scopes).toEqual([
         "operator.admin",
       ]);
-      release = retainUserProfileCatalog();
       const clientClose = vi.fn();
       const targetClose = vi.fn();
       const client = profileClient(requester.id, "role-requester", clientClose);
@@ -147,8 +140,7 @@ it.each(["failed delivery", "self downgrade"] as const)(
         },
         client,
       );
-      expect(getUserProfileRole(changed.id)).toBe("reader");
-      expect(readUserProfileIdentity(changed.id)?.role).toBe("reader");
+      expect(readResidentUserProfileIdentity(changed.id)?.role).toBe("reader");
       expect(resolveOperatorRolePolicyForProfile(changed.id, roleConfig())?.scopes).toEqual([
         "operator.read",
       ]);

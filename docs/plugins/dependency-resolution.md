@@ -40,6 +40,11 @@ OpenClaw uses stable per-source roots:
 - Local/path/archive installs are copied or referenced without dependency
   repair.
 
+These roots are durable install state, not caches. Deleting `~/.openclaw/npm` or
+`~/.openclaw/git` removes every installed external plugin; deployment cleanup
+scripts must leave them in place. Superseded plugin generations are retired by
+the Gateway itself.
+
 npm installs run in that per-plugin project root with:
 
 ```bash
@@ -228,6 +233,15 @@ be declared in the root OpenClaw package's `dependencies` or
 `optionalDependencies`, because the root package ships their runtime.
 External plugins keep their runtime dependencies plugin-local.
 
+Source-built Docker images are a composed distribution when
+`OPENCLAW_EXTENSIONS` selects an otherwise external plugin. The frozen install
+first resolves the ordinary root and selected-plugin production trees. Final
+artifact materialization then adds the selected plugins' existing exact runtime
+pins to the distribution manifest and links those installed identities at both
+the root resolution scope and each packaged plugin root. This supports unified
+root chunks without transferring the dependencies into the source plugin or
+running another install; incompatible existing root bindings fail closed.
+
 Package verification uses build-generated
 `dist/runtime-dependency-ownership.json` to identify chunks used only by
 plugins. Each entry binds a chunk filename and SHA-256 hash to its owning
@@ -256,6 +270,11 @@ workspace links. Native Node imports resolve from each plugin package;
 packaged bundled runtime still uses the root runtime declarations above.
 Rebuild to pick up source edits when using a built tree. Source checkout development is pnpm-only; plain
 `npm install` at the repository root does not prepare the pnpm workspace.
+
+The root build discovers plugin packages and additional top-level source entries
+from Git's tracked files, preserving spaces and Unicode in filenames. Add new
+packages and auto-discovered entry files to the Git index before building. The
+standalone build below also supports packages that are not yet tracked.
 
 | Install shape                                   | Bundled plugin location                              | Dependency owner                                       |
 | ----------------------------------------------- | ---------------------------------------------------- | ------------------------------------------------------ |

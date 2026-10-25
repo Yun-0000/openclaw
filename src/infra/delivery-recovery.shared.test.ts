@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   createDeliveryRecoveryCoordinator,
   isDeliveryRecoveryRetryEligible,
@@ -54,6 +55,27 @@ describe("typed no-send retryability", () => {
       typed: undefined,
       retryable: false,
     },
+    ...(["connect", "read"] as const).map((syscall) => ({
+      name: `grammY-wrapped dual-stack ${syscall} timeout`,
+      error: () =>
+        Object.assign(new Error("Network request for 'sendMessage' failed!"), {
+          name: "HttpError",
+          error: new TypeError("fetch failed", {
+            cause: Object.assign(
+              new AggregateError([
+                Object.assign(new Error("IPv6 route unavailable"), {
+                  code: "ENETUNREACH",
+                  syscall: "connect",
+                }),
+                Object.assign(new Error("IPv4 timed out"), { code: "ETIMEDOUT", syscall }),
+              ]),
+              { code: "ETIMEDOUT" },
+            ),
+          }),
+        }),
+      typed: undefined,
+      retryable: syscall === "connect",
+    })),
     {
       name: "mixed retryable and permanent markers",
       error: () => new AggregateError([retryableMarker(), permanentMarker()]),
@@ -90,14 +112,8 @@ describe("shared durable delivery recovery coordinator", () => {
     const loadEntry = vi.fn(async () => entry);
     const onEntry = vi.fn(async () => undefined);
     const onClaimConflict = vi.fn();
-    let releaseLiveDelivery!: () => void;
-    const liveDelivery = coordinator.withClaim(
-      entry.id,
-      () =>
-        new Promise<void>((resolve) => {
-          releaseLiveDelivery = resolve;
-        }),
-    );
+    const { promise: liveGate, resolve: releaseLiveDelivery } = createDeferred();
+    const liveDelivery = coordinator.withClaim(entry.id, () => liveGate);
 
     await coordinator.scan({ entries: [entry], loadEntry, onEntry, onClaimConflict });
 
@@ -128,14 +144,8 @@ describe("shared durable delivery recovery coordinator", () => {
 
   it("excludes concurrent same-key drains and releases failed drains", async () => {
     const coordinator = createDeliveryRecoveryCoordinator<RecoveryTestEntry>();
-    let releaseDrain!: () => void;
-    const first = coordinator.withDrain(
-      "account:demo",
-      () =>
-        new Promise<void>((resolve) => {
-          releaseDrain = resolve;
-        }),
-    );
+    const { promise: drainGate, resolve: releaseDrain } = createDeferred();
+    const first = coordinator.withDrain("account:demo", () => drainGate);
 
     await expect(coordinator.withDrain("account:demo", async () => undefined)).resolves.toBe(false);
     releaseDrain();

@@ -57,13 +57,10 @@ export type InstalledPluginPackageChannelInfo = PluginPackageChannel;
 /** One manifest-backed plugin entry in the generated installed plugin index. */
 export type InstalledPluginIndexRecord = {
   pluginId: string;
+  /** Retained manifest ownership; readable even when plugin files are unavailable. */
+  contextEngineIds?: readonly string[];
   packageName?: string;
   packageVersion?: string;
-  /**
-   * Legacy embedded install record accepted when reading earlier index files.
-   * New index writes keep install records in InstalledPluginIndex.installRecords.
-   */
-  installRecord?: InstalledPluginInstallRecordInfo;
   /** Hash of the top-level installRecords entry; used to detect source-changed invalidation. */
   installRecordHash?: string;
   /** Native source admissions survive process restarts while the install owner is unchanged. */
@@ -120,7 +117,6 @@ export type InstalledPluginIndex = {
 
 export type InstalledPluginIndexScopeLookup = {
   addAgentHarnessOwners: (target: Set<string>, ids: readonly string[]) => void;
-  addChannelContributionOwners: (target: Set<string>, ids: readonly string[]) => void;
   addDirectChannelOwners: (target: Set<string>, ids: readonly string[]) => void;
   addDirectProviderOwners: (target: Set<string>, ids: readonly string[]) => void;
   addProviderContributionOwners: (target: Set<string>, ids: readonly string[]) => void;

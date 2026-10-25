@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 371771,
-  "reason": "Approved by @steipete for PR #158567 on 2026-09-27: measured startup bundle 371,771 B after main reconciliation and canonical boot-module regeneration, +1,015 B (0.27%) over the previous baseline. Paired baseline and cap retain the 512 B growth and 64 B build-variance allowances, yielding a 372,347 B enforcement limit.",
-  "updatedAt": "2026-09-27"
+  "startupJsGzipBytes": 273565,
+  "reason": "Streaming cold-runtime prefix retention cuts standard script CPU 47.1% and burst 37.7% over 20 interleaved base/A-A/head triplets per workload. After merging main b3ba4d62263, same-host builds measure startup 273582 to 273565 B gzip, unchanged raw startup bytes and seven JS/one CSS requests. Chat is 347 B smaller and New Session 56 B smaller. Ratchet to the measured integrated head.",
+  "updatedAt": "2026-10-25"
 }

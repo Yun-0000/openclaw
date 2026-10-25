@@ -1,4 +1,5 @@
 import { setTimeout as sleep } from "node:timers/promises";
+import type { QaBusMessage } from "openclaw/plugin-sdk/qa-channel-protocol";
 import type { QaBusState } from "./bus-state.js";
 import {
   findFailureOutboundMessage,
@@ -6,11 +7,6 @@ import {
   type QaTransportState,
 } from "./qa-transport.js";
 import { extractQaFailureReplyText } from "./reply-failure.js";
-import type { QaBusMessage } from "./runtime-api.js";
-
-type WaitForNoOutboundOptions = {
-  sinceIndex?: number;
-};
 
 async function waitForQaInboundCompletion(
   state: QaBusState,
@@ -102,7 +98,9 @@ async function waitForOutboundMessage(
 async function waitForNoOutbound(
   state: QaTransportState,
   timeoutMs = 1_200,
-  options?: WaitForNoOutboundOptions,
+  options?: {
+    sinceIndex?: number;
+  },
 ) {
   await sleep(timeoutMs);
   const outbound = state

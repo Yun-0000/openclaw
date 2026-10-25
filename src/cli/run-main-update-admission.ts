@@ -3,6 +3,7 @@ import {
   consumeRootCommandOptionToken,
   getCommandArgsWithRootOptions,
 } from "../infra/cli-root-options.js";
+import { normalizeFsSafeNativeEnv } from "../infra/fs-safe-env.js";
 import type { resolveCliArgvInvocation } from "./argv-invocation.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./profile.js";
 
@@ -25,6 +26,9 @@ export async function tryRunUpdateAdmissionBeforeStartup(
   if (!isUpdateAdmissionInvocation(invocation)) {
     return false;
   }
+  // The supervisor parses stdout as one verdict; raised console levels must not prefix it.
+  const { routeLogsToStderr } = await import("../logging/console.js");
+  routeLogsToStderr();
   const reject = (message: string) => {
     console.error(message);
     process.exitCode = 2;
@@ -67,6 +71,7 @@ export async function tryRunUpdateAdmissionBeforeStartup(
   if (profile.profile) {
     applyCliProfileEnv({ profile: profile.profile });
   }
+  normalizeFsSafeNativeEnv();
   const { updateAdmitCommand } = await import("./update-cli/update-command-admit.js");
   await updateAdmitCommand(contextPath);
   return true;

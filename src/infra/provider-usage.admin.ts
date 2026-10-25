@@ -1,3 +1,4 @@
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { readProviderJsonObjectResponse } from "../agents/provider-http-errors.js";
@@ -10,11 +11,6 @@ import type {
 
 const DAY_MS = 86_400_000;
 const MAX_USAGE_PAGES = 100;
-
-type ProviderUsagePageRequest = {
-  url: URL;
-  headers: HeadersInit;
-};
 
 type ProviderUsageDailyAccumulator = ProviderUsageCostDaily & {
   categories: Map<string, number>;
@@ -53,13 +49,7 @@ export function decodeProviderUsageAdminToken(prefix: string, raw: string): stri
 export { asOptionalRecord as asProviderUsageObject };
 
 export function parseProviderUsageNumber(value: unknown): number | undefined {
-  const parsed =
-    typeof value === "number"
-      ? value
-      : typeof value === "string" && value.trim()
-        ? Number(value)
-        : Number.NaN;
-  return Number.isFinite(parsed) ? parsed : undefined;
+  return asFiniteNumber(typeof value === "string" && value.trim() ? Number(value) : value);
 }
 
 export function parseProviderUsageNonNegativeNumber(value: unknown): number | undefined {
@@ -103,7 +93,10 @@ export async function fetchProviderUsagePages(params: {
   responseMaxBytes: number;
   timeoutMs: number;
   fetchFn: typeof fetch;
-  buildRequest: (page: string | undefined) => ProviderUsagePageRequest;
+  buildRequest: (page: string | undefined) => {
+    url: URL;
+    headers: HeadersInit;
+  };
 }): Promise<{ ok: true; data: unknown[] } | { ok: false; status?: number }> {
   const data: unknown[] = [];
   const seenPages = new Set<string>();

@@ -19,6 +19,7 @@ import { isPassThroughRemoteMediaSource } from "@openclaw/media-core/media-sourc
 import { isPathInside } from "../infra/path-guards.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { resolveConfigDir, shortenHomePath } from "../utils.js";
+import { resolveHostWorkspaceRoot } from "./workspace-write-scope.js";
 
 const DATA_URL_RE = /^data:/i;
 const SANDBOX_CONTAINER_WORKDIR = "/workspace";
@@ -67,9 +68,6 @@ export function resolveSandboxPath(params: { filePath: string; cwd: string; root
   const resolved = resolveSandboxInputPath(params.filePath, params.cwd);
   const rootResolved = path.resolve(params.root);
   const relative = path.relative(rootResolved, resolved);
-  if (!relative || relative === "") {
-    return { resolved, relative: "" };
-  }
   if (
     relative === ".." ||
     relative.startsWith("../") ||
@@ -143,10 +141,13 @@ export async function assertSandboxPath(params: {
   filePath: string;
   cwd: string;
   root: string;
+  allowLinkedWorktrees?: boolean;
   allowFinalSymlinkForUnlink?: boolean;
   allowFinalHardlinkForUnlink?: boolean;
 }) {
-  const root = path.resolve(params.root);
+  const root = params.allowLinkedWorktrees
+    ? resolveHostWorkspaceRoot(params.root, resolveSandboxInputPath(params.filePath, params.cwd))
+    : path.resolve(params.root);
   const cwd = path.resolve(params.cwd);
   let resolutionCwd = cwd;
   let filePath = params.filePath;
@@ -325,13 +326,8 @@ function mapContainerWorkspaceFileUrl(params: {
   sandboxRoot: string;
   containerWorkdir: string;
 }): string | undefined {
-  let parsed: URL;
-  try {
-    parsed = new URL(params.fileUrl);
-  } catch {
-    return undefined;
-  }
-  if (parsed.protocol !== "file:") {
+  const parsed = URL.parse(params.fileUrl);
+  if (parsed?.protocol !== "file:") {
     return undefined;
   }
   const host = parsed.hostname.trim().toLowerCase();
@@ -370,9 +366,6 @@ function mapContainerWorkspacePath(params: {
     return undefined;
   }
   const rel = normalized.slice(prefix.length);
-  if (!rel) {
-    return path.resolve(params.sandboxRoot);
-  }
   return path.resolve(params.sandboxRoot, ...rel.split("/").filter(Boolean));
 }
 

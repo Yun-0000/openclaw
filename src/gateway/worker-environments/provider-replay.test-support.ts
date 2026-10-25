@@ -1,11 +1,7 @@
 import { vi } from "vitest";
-import {
-  GATEWAY_CLIENT_IDS,
-  GATEWAY_CLIENT_MODES,
-} from "../../../packages/gateway-protocol/src/client-info.js";
-import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import { bindDeviceWorkerAvailability } from "./device-provider.js";
 import type { WorkerEnvironmentNodeTunnel } from "./environment-access.js";
+import { createNodeWorkerBundleTestNode } from "./node-worker-bundle.test-support.js";
 import { createWorkerPlacementDispatchService } from "./placement-dispatch.js";
 import type { WorkerTurnTunnelHandle } from "./tunnel-contract.js";
 import { measureLaunchTurn, readLaunchToolNames } from "./worker-turn-launcher.test-support.js";
@@ -20,6 +16,7 @@ export function createProviderReplayNodeTunnel() {
   }));
   const nodeTunnelManager = {
     status: () => "stopped" as const,
+    observeProcesses: vi.fn<WorkerEnvironmentNodeTunnel["observeProcesses"]>(),
     start: vi.fn<WorkerEnvironmentNodeTunnel["start"]>(async ({ environmentId, ownerEpoch }) => ({
       environmentId,
       ownerEpoch,
@@ -34,6 +31,7 @@ export function createProviderReplayNodeTunnel() {
     })),
     stop: vi.fn(async () => {}),
     stopAll: vi.fn(async () => {}),
+    beginClose: vi.fn(),
   } satisfies WorkerEnvironmentNodeTunnel;
   return { nodeTunnelManager, syncWorkspace };
 }
@@ -43,28 +41,25 @@ export function bindProviderReplayNodeAvailability(
 ) {
   bindDeviceWorkerAvailability(service, async (nodeId) => ({
     available: true,
-    node: {
+    node: createNodeWorkerBundleTestNode({
       nodeId,
       connId: `conn-${nodeId}`,
       pairingIdentity: `identity-${nodeId}`,
       pairingGeneration: `generation-${nodeId}`,
-      clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
-      clientMode: GATEWAY_CLIENT_MODES.NODE,
-      protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
       workerHost: {
-        enabled: true,
         capacity: { total: 1, available: 1 },
         capturedExecPolicy: true,
+        promptContext: 1,
       },
-      commands: [],
-    },
+    }),
   }));
 }
 
 type DispatchOptions = Parameters<typeof createWorkerPlacementDispatchService>[0];
 
 export function createProviderReplayDispatch(
-  options: Pick<DispatchOptions, "placements" | "environments"> & Partial<DispatchOptions>,
+  options: Pick<DispatchOptions, "placements" | "environments" | "initialPlacements"> &
+    Partial<DispatchOptions>,
 ) {
   return createWorkerPlacementDispatchService({
     runnerAvailability: { read: () => undefined, version: () => 0 },
@@ -76,7 +71,7 @@ export function createProviderReplayDispatch(
     resolveMoveDestination: async () => undefined,
     runReclaimPreparation: async ({ run, authorize }) => await run(authorize),
     runReclaimBarrier: async ({ begin, reclaim }) =>
-      await reclaim({ kind: "local", path: "/gateway/workspace" }, begin()),
+      await reclaim({ kind: "local", path: "/gateway/workspace" }, await begin()),
     runFailedReclaimBarrier: async ({ reclaim }) => await reclaim(),
     ...createWorkerWorkspaceRecoveryFixture({
       resolveWorkspace: async () => ({ kind: "local", path: "/gateway/workspace" }),

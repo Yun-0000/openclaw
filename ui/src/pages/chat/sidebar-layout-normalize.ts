@@ -21,12 +21,15 @@ function normalizeSlotId(value: unknown): SidebarSlotId | null {
   return value === "browser" ||
     value === "link-reader" ||
     value === "companion" ||
+    value === "context" ||
     value === "conversation" ||
     value === "dashboard" ||
     value === "desktop" ||
     value === "detail" ||
     value === "discussion" ||
     value === "portal" ||
+    value === "processes" ||
+    value === "subagents" ||
     value === "terminal" ||
     value === "workspace" ||
     isPluginSlotId(value)
@@ -161,7 +164,7 @@ export function normalizeSidebarLayout(value: unknown): SidebarLayout {
     ...(value.expanded === true &&
     value.expandedSide === true &&
     value.open !== false &&
-    activeSidePanel
+    (activeSidePanel || columnId)
       ? { expandedSide: true }
       : {}),
     ...(value.resourceAutoOpenDismissed === true ? { resourceAutoOpenDismissed: true } : {}),

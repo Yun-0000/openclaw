@@ -1,4 +1,6 @@
 import { expect, it } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import {
   createNewSessionPageE2eSuite,
   installMockGateway,
@@ -10,18 +12,18 @@ const suite = createNewSessionPageE2eSuite();
 suite.define(() => {
   it("keeps a revoked provisional page display-only while the next route loads", async () => {
     const browser = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
-    let releaseRoute = () => {};
-    const routeReady = new Promise<void>((resolve) => {
-      releaseRoute = resolve;
-    });
+    const { promise: routeReady, resolve: releaseRoute } = createDeferred();
     try {
       const page = await browser.newPage();
       let loadingNextRoute = false;
-      await page.route("**/assets/about-page-*.js*", async (route) => {
-        loadingNextRoute = true;
-        await routeReady;
-        await route.continue();
-      });
+      await page.route(
+        controlUiE2eBuiltModuleRequest("ui/src/pages/about/about-page.tsx"),
+        async (route) => {
+          loadingNextRoute = true;
+          await routeReady;
+          await route.continue();
+        },
+      );
       const gateway = await installMockGateway(page);
       await page.goto(`${suite.server.baseUrl}new?agent=main`);
       await page.locator(".new-session-page__message").fill("private pending draft");

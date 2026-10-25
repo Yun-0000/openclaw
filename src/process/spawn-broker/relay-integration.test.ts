@@ -1,13 +1,21 @@
 import { ChildProcess } from "node:child_process";
+import fs from "node:fs/promises";
+import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
+import { pathToFileURL } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
+import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { spawnProcess } from "../spawn-utils.js";
 import { createServiceChildRelayAdapter } from "../supervisor/service-child-relay-host.js";
 import { createProcessSupervisor } from "../supervisor/supervisor.js";
 import type { ProcessExtinctionResult } from "../supervisor/types.js";
 import { BrokerChild } from "./child.js";
+import { spawnServiceChildRelay } from "./relay-integration.js";
 
-vi.mock("../spawn-utils.js", () => ({ spawnProcess: vi.fn() }));
+vi.mock("../spawn-utils.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../spawn-utils.js")>()),
+  spawnProcess: vi.fn(),
+}));
 afterEach(() => vi.restoreAllMocks());
 
 it("settles a streamless native spawn failure and releases its execution scope", async () => {
@@ -61,5 +69,47 @@ it("publishes retained cleanup before a broker transport fails readiness", async
     await expect(cleanups[0]).rejects.toBe(failure);
   } finally {
     process.off("unhandledRejection", unhandled);
+  }
+});
+
+it("launches the stable Homebrew Node after an upgrade removed the running Cellar keg", async () => {
+  await withTestDir({ prefix: "openclaw-relay-node-" }, async (prefix) => {
+    const stableNode = path.join(prefix, "opt", "node", "bin", "node");
+    const workerPath = path.join(prefix, "relay-worker.js");
+    await fs.mkdir(path.dirname(stableNode), { recursive: true });
+    await fs.writeFile(stableNode, "", "utf8");
+    vi.mocked(spawnProcess).mockReturnValue(new ChildProcess());
+    const originalExecPath = process.execPath;
+    process.execPath = path.join(prefix, "Cellar", "node", "26.8.1", "bin", "node");
+    try {
+      spawnServiceChildRelay({
+        workerUrl: pathToFileURL(workerPath),
+        stdio: "ignore",
+        env: {},
+        detached: false,
+      });
+    } finally {
+      process.execPath = originalExecPath;
+    }
+    expect(spawnProcess).toHaveBeenLastCalledWith(stableNode, [workerPath], expect.any(Object));
+  });
+});
+
+it("keeps an embedded relay out of its downloaded worker's generic runtime mode", () => {
+  const workerUrl = pathToFileURL(path.resolve("runtime/dist/service-child-relay.mjs"));
+  const env = { BUN_BE_BUN: "1", HOME: "/synthetic-worker-home" };
+  vi.stubGlobal(
+    "__openclawStandaloneIsEmbeddedModule",
+    (filename: string) => filename === path.resolve("runtime/dist/service-child-relay.mjs"),
+  );
+  vi.mocked(spawnProcess).mockReturnValue(new ChildProcess());
+  try {
+    spawnServiceChildRelay({ workerUrl, stdio: "ignore", env, detached: false });
+    expect(vi.mocked(spawnProcess).mock.lastCall?.[2]?.env).toEqual({
+      HOME: "/synthetic-worker-home",
+    });
+    expect(env.BUN_BE_BUN).toBe("1");
+  } finally {
+    vi.unstubAllGlobals();
   }
 });

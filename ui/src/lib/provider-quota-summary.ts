@@ -1,48 +1,17 @@
-import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import type { ModelAuthStatusProvider, ModelAuthStatusResult } from "../api/types.ts";
 
-export function formatQuotaReset(resetAt?: number): string | null {
-  const timestampMs = asDateTimestampMs(resetAt);
-  if (timestampMs === undefined) {
-    return null;
-  }
-  const diffMs = timestampMs - Date.now();
-  if (diffMs <= 0) {
-    return "now";
-  }
-  const minutes = Math.floor(diffMs / 60_000);
-  if (minutes < 1) {
-    return "<1m";
-  }
-  if (minutes < 60) {
-    return `${minutes}m`;
-  }
-  const hours = Math.floor(minutes / 60);
-  const remainingMinutes = minutes % 60;
-  if (hours < 24) {
-    return remainingMinutes > 0 ? `${hours}h ${remainingMinutes}m` : `${hours}h`;
-  }
-  const days = Math.floor(hours / 24);
-  if (days < 7) {
-    const remainingHours = hours % 24;
-    return remainingHours > 0 ? `${days}d ${remainingHours}h` : `${days}d`;
-  }
-  return new Date(timestampMs).toLocaleDateString(undefined, { month: "short", day: "numeric" });
-}
-
-/** Auth-status source props for surfaces that render provider plan usage. */
 export type ProviderUsageDisplayProps = {
   basePath?: string;
   modelAuthStatusResult?: ModelAuthStatusResult | null;
 };
 
-export type QuotaLimitSummary = {
+type QuotaLimitSummary = {
   label: string;
   usedPercent: number;
   resetAt?: number;
 };
 
-export type QuotaBudgetSummary = {
+type QuotaBudgetSummary = {
   label?: string;
   used: number;
   limit: number;
@@ -54,15 +23,10 @@ export type ProviderQuotaGroup = {
   providers: string[];
   displayName: string;
   plan?: string;
-  /** Account email the usage was fetched under, when known. */
   accountEmail?: string;
   windows: QuotaLimitSummary[];
   budgets: QuotaBudgetSummary[];
 };
-
-function clampPercent(value: number): number {
-  return Math.max(0, Math.min(100, Math.round(value)));
-}
 
 /**
  * Groups provider usage windows and budget billing into per-provider plan
@@ -80,16 +44,15 @@ export function collectProviderQuotaGroups(
     if (!usage) {
       continue;
     }
-    const windows: QuotaLimitSummary[] = (usage.windows ?? []).map((limit) => {
-      const summary: QuotaLimitSummary = {
-        label: (limit.label || "").trim(),
-        usedPercent: clampPercent(limit.usedPercent),
-      };
-      if (limit.resetAt !== undefined) {
-        summary.resetAt = limit.resetAt;
-      }
-      return summary;
-    });
+    const windows: QuotaLimitSummary[] = (usage.windows ?? []).map((limit) =>
+      Object.assign(
+        {
+          label: (limit.label || "").trim(),
+          usedPercent: Math.max(0, Math.min(100, Math.round(limit.usedPercent))),
+        },
+        limit.resetAt !== undefined ? { resetAt: limit.resetAt } : {},
+      ),
+    );
     const budgets: QuotaBudgetSummary[] = (usage.billing ?? []).flatMap((entry) => {
       if (
         entry.type !== "budget" ||

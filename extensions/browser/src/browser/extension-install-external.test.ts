@@ -1,32 +1,47 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
-import { chromeProductRoots } from "./extension-install-layout.js";
+import { describe, expect, it, vi } from "vitest";
 import {
-  installChromeExtensionBootstrap,
+  useInstallFixture,
+  withAdvancingInstallClock,
+  chromeStoreInstallRequests,
   removeChromeStoreInstallRequests,
   uninstallChromeExtensionNativeHosts,
-} from "./extension-install.js";
-import {
-  FOUNDATION_STORE_ID,
-  useExtensionInstallFixture,
-  writeChromePreferences,
-} from "./extension-install.test-support.js";
+} from "./extension-install-fixture.test-support.js";
+import { FOUNDATION_STORE_ID } from "./extension-install.test-support.js";
+import type { WindowsManagementRequest } from "./extension-windows-contract.js";
+import { windowsFixture } from "./extension-windows.test-support.js";
 
-const fixture = useExtensionInstallFixture();
+const fixture = useInstallFixture();
 
 async function setup(platform: NodeJS.Platform = "darwin") {
   const value = await fixture(platform);
-  const chrome = chromeProductRoots(value.deps).find((root) => root.product === "chrome");
-  if (!chrome) {
-    throw new Error("missing Chrome fixture root");
-  }
-  const preferences = await writeChromePreferences({
-    userDataDir: chrome.userDataDir,
-    profile: "Default",
-    entries: {
-      [FOUNDATION_STORE_ID]: { location: 6, from_webstore: true, disable_reasons: [8_192] },
-    },
+  const windows = platform === "win32" ? windowsFixture() : undefined;
+  const manage = windows
+    ? vi.fn(async (_executable: string, request: WindowsManagementRequest) => {
+        if (!request.context) {
+          throw new Error("Expected a native Windows installation context");
+        }
+        windows.prepare(request.context, request.expectedOrigins);
+        return windows.response;
+      })
+    : undefined;
+  const deps = {
+    ...value.deps,
+    ...(windows && manage
+      ? {
+          windowsNative: {
+            platform: windows.ops,
+            context: windows.context,
+            executable: windows.executable,
+            manage,
+          },
+        }
+      : {}),
+  };
+  const chrome = value.productRoot();
+  const preferences = await value.preferences({
+    [FOUNDATION_STORE_ID]: { location: 6, from_webstore: true, disable_reasons: [8_192] },
   });
   const requestPath = path.join(
     chrome.userDataDir,
@@ -34,36 +49,20 @@ async function setup(platform: NodeJS.Platform = "darwin") {
     `${FOUNDATION_STORE_ID}.json`,
   );
   const install = (requestStoreInstall?: boolean) =>
-    installChromeExtensionBootstrap({
-      bundledDir: value.bundledDir,
-      pluginRoot: value.pluginRoot,
-      waitMs: 1_000,
-      deps: value.deps,
+    value.install({
+      deps,
       requestStoreInstall,
     });
-  return { ...value, chrome, preferences, requestPath, install };
+  return { ...value, deps, chrome, preferences, requestPath, install, manage };
 }
 
 describe("Chrome Store installation request", () => {
   it("prepares macOS Chrome before its first launch without creating or approving a profile", async () => {
     const value = await fixture("darwin");
-    const chrome = chromeProductRoots(value.deps).find((root) => root.product === "chrome");
-    if (!chrome) {
-      throw new Error("missing Chrome fixture root");
-    }
+    const chrome = value.productRoot();
     await expect(fs.access(chrome.userDataDir)).rejects.toMatchObject({ code: "ENOENT" });
-    let now = 0;
-    const status = await installChromeExtensionBootstrap({
-      bundledDir: value.bundledDir,
-      pluginRoot: value.pluginRoot,
-      waitMs: 1_000,
-      deps: {
-        ...value.deps,
-        now: () => now,
-        sleep: async (ms) => {
-          now += ms;
-        },
-      },
+    const status = await value.install({
+      deps: withAdvancingInstallClock(value.deps),
     });
 
     expect(status.registrations.find((entry) => entry.product === "chrome")).toMatchObject({
@@ -167,7 +166,26 @@ describe("Chrome Store installation request", () => {
     "leaves %s external installation unchanged",
     async (platform) => {
       const value = await setup(platform);
-      expect((await value.install()).storeInstallRequests).toEqual([]);
+      const installed = await value.install();
+      expect(await chromeStoreInstallRequests(value.deps)).toEqual([]);
+      expect(installed.storeInstallRequests).toEqual(
+        platform === "win32"
+          ? [
+              {
+                browser: "Google Chrome",
+                path: "Windows current-user Chrome Store request",
+                state: "missing",
+              },
+            ]
+          : [],
+      );
+      if (platform === "win32") {
+        expect(value.manage).toHaveBeenCalledExactlyOnceWith(
+          expect.any(String),
+          expect.objectContaining({ action: "install", store: "preserve" }),
+          expect.any(Object),
+        );
+      }
       await expect(fs.access(value.requestPath)).rejects.toMatchObject({ code: "ENOENT" });
     },
   );

@@ -1,19 +1,5 @@
 import { decodeHtmlEntities } from "openclaw/plugin-sdk/html-entity-runtime";
 
-type MSTeamsQuoteInfo = {
-  sender: string;
-  body: string;
-  /**
-   * The quoted message's Teams id (the blockquote `itemid`). Present when Teams
-   * includes it; used to fetch the complete message text via Graph because the
-   * inbound blockquote only carries a truncated `preview` snippet.
-   */
-  id?: string;
-};
-
-/**
- * Strip HTML tags, preserving text content.
- */
 export function htmlToPlainText(html: string): string {
   return decodeHtmlEntities(html.replace(/<[^>]*>/g, " "))
     .replaceAll("\u00a0", " ")
@@ -27,7 +13,7 @@ export function htmlToPlainText(html: string): string {
  */
 export function extractMSTeamsQuoteInfo(
   attachments: Array<{ contentType?: string | null; content?: unknown }>,
-): MSTeamsQuoteInfo | undefined {
+) {
   for (const att of attachments) {
     // Content may be a plain string or an object with .text/.body (e.g. Adaptive Card payloads).
     let content = "";
@@ -46,12 +32,10 @@ export function extractMSTeamsQuoteInfo(
       continue;
     }
 
-    // Look for the Skype Reply schema blockquote.
     if (!content.includes("http://schema.skype.com/Reply")) {
       continue;
     }
 
-    // Extract sender from <strong itemprop="mri">.
     const senderMatch = /<strong[^>]*itemprop=["']mri["'][^>]*>(.*?)<\/strong>/i.exec(content);
     const sender = senderMatch?.[1] ? htmlToPlainText(senderMatch[1]) : undefined;
 

@@ -1,20 +1,24 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { withTempDir } from "../test-utils/temp-dir.js";
 import { applyPatch, createMemoryPatchSandbox } from "./apply-patch.test-support.js";
-
-async function withTempDir<T>(run: (dir: string) => Promise<T>): Promise<T> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-patch-context-"));
-  try {
-    return await run(dir);
-  } finally {
-    await fs.rm(dir, { recursive: true, force: true });
-  }
-}
 
 describe("applyPatch context byte preservation", () => {
   it.each([
+    ...["\u2000", "\u2001"].map((space) => ({
+      name: `an internal U+${space.charCodeAt(0).toString(16)} quad space`,
+      files: { "source.txt": `# wait${space}30 seconds\nold\n` },
+      patch: `*** Begin Patch
+*** Update File: source.txt
+@@
+ # wait 30 seconds
+-old
++new\u2000value\u2001
+*** End Patch`,
+      expected: { "source.txt": `# wait${space}30 seconds\nnew\u2000value\u2001\n` },
+      missing: [],
+    })),
     {
       name: "an end-of-file replacement",
       files: { "source.txt": "head\nlast context  \nold\n" },
@@ -105,7 +109,7 @@ describe("applyPatch context byte preservation", () => {
       missing: [],
     },
   ])("keeps context bytes through $name", async ({ files, patch, expected, missing }) => {
-    await withTempDir(async (dir) => {
+    await withTempDir("openclaw-patch-context-", async (dir) => {
       await Promise.all(
         Object.entries(files).map(([filePath, contents]) =>
           fs.writeFile(path.join(dir, filePath), contents, "utf8"),

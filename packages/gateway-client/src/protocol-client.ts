@@ -3,7 +3,9 @@ import {
   isGatewayEventFrame,
   isGatewayResponseFrame,
 } from "@openclaw/gateway-protocol/frame-guards";
+import { toStringifiedError } from "@openclaw/normalization-core";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
+import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { resolveSleepDelayMs, RetrySupervisor, sleepWithAbort } from "@openclaw/retry";
 import { GatewayEventListeners } from "./event-listeners.js";
 import { GatewayPendingRequests, type GatewayProtocolRequestTiming } from "./pending-request.js";
@@ -37,6 +39,10 @@ export type {
   GatewayProtocolSocketHandlers,
   GatewayProtocolTiming,
 } from "./protocol-client-contract.js";
+
+const DEFAULT_CONNECT_FAILURE: Readonly<
+  ReturnType<NonNullable<GatewayProtocolClientOptions<unknown>["onConnectPlanError"]>>
+> = Object.freeze({ closeCode: 1008, closeReason: "connect failed" });
 
 /**
  * Browser-safe gateway wire client. Environment adapters own transport and auth
@@ -93,6 +99,11 @@ export class GatewayProtocolClient<TPlan> {
 
   get connecting(): boolean {
     return this.connectSent && !this.helloReceived;
+  }
+
+  /** A transport upgrade is in flight; the socket adapter bounds how long it may stay open. */
+  get opening(): boolean {
+    return this.socket !== null && !this.socketOpened;
   }
 
   get hasUnboundedPendingRequests(): boolean {
@@ -209,7 +220,7 @@ export class GatewayProtocolClient<TPlan> {
         error: (error) => this.handleSocketError(socket, generation, error),
       });
     } catch (error) {
-      const normalized = error instanceof Error ? error : new Error(String(error));
+      const normalized = toStringifiedError(error);
       this.opts.onSocketFactoryError?.(normalized);
       this.opts.onConnectError?.(normalized);
       if (this.opts.rethrowSocketFactoryError?.(normalized)) {
@@ -324,11 +335,8 @@ export class GatewayProtocolClient<TPlan> {
     if (!this.isConnectCurrent(socket, generation)) {
       return;
     }
-    const normalized = error instanceof Error ? error : new Error(String(error));
-    const outcome = this.opts.onConnectPlanError?.(normalized) ?? {
-      closeCode: 1008,
-      closeReason: "connect failed",
-    };
+    const normalized = toStringifiedError(error);
+    const outcome = this.opts.onConnectPlanError?.(normalized) ?? DEFAULT_CONNECT_FAILURE;
     this.opts.onConnectError?.(outcome.error ?? normalized);
     if (outcome.stop) {
       this.stopped = true;
@@ -348,9 +356,12 @@ export class GatewayProtocolClient<TPlan> {
       plan,
     };
     this.recordTiming("connect-plan-ready", generation, plan);
-    this.recordTiming("request-sent", generation, plan);
-    this.connectRequestSent = true;
-    void this.request<HelloOk>("connect", this.opts.buildConnectParams(plan))
+    void this.request<HelloOk>("connect", this.opts.buildConnectParams(plan), {
+      onSent: () => {
+        this.connectRequestSent = true;
+        this.recordTiming("request-sent", generation, plan);
+      },
+    })
       .then((hello) => {
         // Closing transports remain current until their close callback runs;
         // a late response must not publish readiness or reset reconnect backoff.
@@ -385,10 +396,8 @@ export class GatewayProtocolClient<TPlan> {
             : new GatewayProtocolRequestError({ message: String(error) });
         // Close can arrive while adapter cleanup is pending; retain the received error now.
         this.connectFailure = { error: requestError };
-        const outcome = this.opts.onConnectFailure?.(requestError, context) ?? {
-          closeCode: 1008,
-          closeReason: "connect failed",
-        };
+        const outcome =
+          this.opts.onConnectFailure?.(requestError, context) ?? DEFAULT_CONNECT_FAILURE;
         const applyFailure = (decision: Awaited<typeof outcome>) => {
           if (!this.isActive(socket, generation)) {
             return;
@@ -397,6 +406,10 @@ export class GatewayProtocolClient<TPlan> {
             error: requestError,
             reconnectDelayMs: decision.reconnectDelayMs,
           };
+          if (decision.keepOpen) {
+            this.clearHandshakeTimer();
+            return;
+          }
           if (decision.stop) {
             this.stopped = true;
           }
@@ -412,8 +425,8 @@ export class GatewayProtocolClient<TPlan> {
         if (!this.isConnectCurrent(socket, generation)) {
           return;
         }
-        this.opts.onConnectError?.(error instanceof Error ? error : new Error(String(error)));
-        this.closeSocket(1008, "connect failed");
+        this.opts.onConnectError?.(toStringifiedError(error));
+        this.closeSocket(DEFAULT_CONNECT_FAILURE.closeCode, DEFAULT_CONNECT_FAILURE.closeReason);
       });
   }
 
@@ -444,9 +457,7 @@ export class GatewayProtocolClient<TPlan> {
           return;
         }
         this.connectNonce = nonce;
-        this.serverCapabilities = Array.isArray(payload?.capabilities)
-          ? payload.capabilities.filter((value): value is string => typeof value === "string")
-          : [];
+        this.serverCapabilities = filterStringEntries(payload?.capabilities);
         const challengeTs = payload?.ts;
         this.connectChallengeTs =
           typeof challengeTs === "number" && Number.isSafeInteger(challengeTs) && challengeTs >= 0
@@ -456,8 +467,8 @@ export class GatewayProtocolClient<TPlan> {
         this.sendConnect(socket, generation);
         return;
       }
-      const seq = typeof parsed.seq === "number" ? parsed.seq : null;
-      if (seq !== null) {
+      const seq = parsed.seq;
+      if (seq !== undefined) {
         if (this.lastSeq !== null && seq > this.lastSeq + 1) {
           const expected = this.lastSeq + 1;
           const state = asRecord(parsed.payload).state;
@@ -498,13 +509,13 @@ export class GatewayProtocolClient<TPlan> {
   ): void {
     // Snapshot before callbacks so replacement listeners cannot inherit a retired event.
     const listeners = this.listeners.snapshot();
-    if (
-      event.event === "gateway.suspension" &&
-      typeof event.payload === "object" &&
-      event.payload !== null &&
-      "phase" in event.payload
+    if (event.event === "gateway.suspension") {
+      this.requests.setSuspensionPhase(asRecord(event.payload).phase);
+    } else if (
+      event.event === "shutdown" &&
+      typeof asRecord(event.payload).restartExpectedMs === "number"
     ) {
-      this.requests.setSuspensionPhase(event.payload.phase);
+      this.requests.setSuspensionPhase("draining");
     }
     this.invoke("event", () => this.opts.onEvent?.(event));
     for (const [listener, subscription] of listeners) {
