@@ -21,6 +21,7 @@ import type {
 import {
   buildSenderName,
   getTelegramTextParts,
+  resolveTelegramDisplayedTextParts,
   resolveTelegramPrimaryMedia,
   type TelegramThreadSpec,
 } from "./bot/helpers.js";
@@ -134,7 +135,7 @@ export function formatTelegramAmbientTranscriptBody(
   messages: readonly Message[],
 ): string | undefined {
   const lines = messages.map((msg) => {
-    const text = getTelegramTextParts(msg).text.trim();
+    const text = resolveTelegramDisplayedTextParts(msg).text.trim();
     const media = resolveTelegramPrimaryMedia(msg);
     const body = text || formatMediaPlaceholderText(media ? [{ kind: media.kind }] : [{}]);
     const messageId = msg.message_id ? `#${msg.message_id}` : undefined;

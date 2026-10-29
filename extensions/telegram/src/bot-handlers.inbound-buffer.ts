@@ -33,6 +33,7 @@ import {
   buildTelegramGroupPeerId,
   getTelegramTextParts,
   joinTelegramTextParts,
+  resolveTelegramDisplayedTextParts,
   resolveTelegramPrimaryMedia,
   type TelegramThreadSpec,
 } from "./bot/helpers.js";
@@ -114,7 +115,7 @@ export function createTelegramInboundBuffers({
       : debounceMs;
   };
   const shouldDebounceTelegramEntry = (entry: TelegramDebounceEntry): boolean => {
-    const textParts = getTelegramTextParts(entry.msg);
+    const textParts = resolveTelegramDisplayedTextParts(entry.msg);
     if (textParts.entities.some((entity) => entity.type === "bot_command" && entity.offset === 0)) {
       return false;
     }

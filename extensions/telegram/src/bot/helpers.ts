@@ -29,6 +29,7 @@ import {
   isBinaryContent,
   joinTelegramTextParts,
   normalizeForwardedContext,
+  resolveTelegramDisplayedTextParts,
   resolveTelegramNonTextBody,
   resolveTelegramPrimaryMedia,
   resolveTelegramRichMessageBody,
@@ -53,6 +54,7 @@ export {
   isBinaryContent,
   joinTelegramTextParts,
   normalizeForwardedContext,
+  resolveTelegramDisplayedTextParts,
   resolveTelegramPrimaryMedia,
 };
 

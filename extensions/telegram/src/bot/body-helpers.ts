@@ -253,6 +253,22 @@ export function getTelegramTextParts(msg: TelegramTextMessage): {
   return { text: msg.poll ? formatTelegramPollText(msg.poll) : "", entities: [] };
 }
 
+// Burst assembly reads this, not getTelegramTextParts. Native text, captions,
+// contacts, and polls stay on that reader so commands and the message cache do
+// not treat rich blocks as Bot API text. A rich-only update still has text the
+// agent will see, and the forward quiet window has to count it.
+export function resolveTelegramDisplayedTextParts(msg: TelegramTextMessage): {
+  text: string;
+  entities: TelegramTextEntity[];
+} {
+  const parts = getTelegramTextParts(msg);
+  if (parts.text) {
+    return parts;
+  }
+  const richText = resolveTelegramRichMessageText(msg);
+  return richText ? { text: richText, entities: [] } : parts;
+}
+
 export function joinTelegramTextParts(
   messages: readonly Message[],
   separator: string | ((previous: Message) => string),
@@ -263,7 +279,7 @@ export function joinTelegramTextParts(
   let previous: Message | undefined;
 
   for (const message of messages) {
-    const textPart = getTelegramTextParts(message);
+    const textPart = resolveTelegramDisplayedTextParts(message);
     if (!textPart.text) {
       continue;
     }

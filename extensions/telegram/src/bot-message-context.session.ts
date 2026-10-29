@@ -27,8 +27,8 @@ import {
   buildTelegramGroupFrom,
   buildTelegramParentPeer,
   describeReplyTarget,
-  getTelegramTextParts,
   normalizeForwardedContext,
+  resolveTelegramDisplayedTextParts,
   resolveTelegramPrimaryMedia,
   type TelegramReplyTarget,
 } from "./bot/helpers.js";
@@ -314,7 +314,7 @@ export async function buildTelegramInboundContextPayload(
   const bufferedBodySegments = shouldRenderBufferedBody
     ? bufferedMessages.flatMap((bufferedMessage) => {
         const bufferedMedia = resolveTelegramPrimaryMedia(bufferedMessage);
-        const textParts = getTelegramTextParts(bufferedMessage);
+        const textParts = resolveTelegramDisplayedTextParts(bufferedMessage);
         const segmentBody =
           renderTelegramTextEntities(textParts.text, textParts.entities) ||
           formatMediaPlaceholderText(bufferedMedia ? [{ kind: bufferedMedia.kind }] : []);

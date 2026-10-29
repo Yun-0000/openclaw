@@ -1441,6 +1441,61 @@ describe("createTelegramBot", () => {
     },
   );
 
+  it("coalesces a burst of forwarded rich messages into one turn", async () => {
+    configureOpenDm({ userTimezone: "UTC" });
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const sourceWork: Promise<unknown>[] = [];
+    let flushForward: (() => void) | undefined;
+
+    try {
+      await createTelegramBot({ token: "tok" });
+      const messageHandler = getMessageHandler();
+      const messages = [
+        [571, "First rich note", "Original A"],
+        [572, "Second rich note", "Original B"],
+      ] as const;
+      for (const [messageId, text, origin] of messages) {
+        const replay = await dispatchSpooledPrivateText(messageHandler, {
+          updateId: messageId,
+          text: "",
+          messageId,
+          date: 1736380800 + messageId,
+          replayUpdate: "full",
+          message: {
+            text: undefined,
+            rich_message: {
+              blocks: [{ type: "paragraph", text }],
+            },
+            forward_origin: {
+              type: "hidden_user",
+              date: 500 + messageId,
+              sender_user_name: origin,
+            },
+          },
+        });
+        sourceWork.push(requireValue(replay.deferredWork, "forwarded rich participant").task);
+        flushForward = takeLatestTimerCallback(1_000);
+      }
+
+      requireValue(flushForward, "forwarded rich debounce callback")();
+      await Promise.all(sourceWork);
+      expect(replySpy).toHaveBeenCalledOnce();
+      const payload = requireValue(replySpy.mock.calls[0]?.[0], "forwarded rich batch payload");
+      expect(payload.RawBody).toBe("First rich note\nSecond rich note");
+      expect(payload.BodyForAgent).toContain("First rich note");
+      expect(payload.BodyForAgent).toContain("Second rich note");
+      expect(payload.BodyForAgent).toContain("[Forwarded from Original A");
+      expect(payload.BodyForAgent).toContain("[Forwarded from Original B");
+      expect(payload.BodyForAgent).toMatch(
+        /\[Forwarded from Original A[^\]]*\]\nFirst rich note\n\[Forwarded from Original B[^\]]*\]\nSecond rich note/,
+      );
+    } finally {
+      flushForward?.();
+      await Promise.allSettled(sourceWork);
+      setTimeoutSpy.mockRestore();
+    }
+  });
+
   it("does not let an unauthorized group stop cancel pending text", async () => {
     const text = "B".repeat(4065);
     const chatId = nextForumCacheChatId();
