@@ -3,7 +3,7 @@ import {
   parseInlineDirectives,
   stripInlineDirectiveTagsForDelivery,
 } from "../../utils/directive-tags.js";
-import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
+import { isSilentReplyText, isTruncatedSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 import { stripMixedSilentReplyTokens } from "./mixed-silent-reply-tokens.js";
 import type { ReplyDirectiveParseResult } from "./reply-directives.js";
 
@@ -90,7 +90,7 @@ export function createStreamingDirectiveAccumulator(): StreamingDirectiveAccumul
         prepared = stripped;
         protocolResolved = true;
       } else if (options?.final) {
-        if (isSilentReplyText(pendingProtocol)) {
+        if (isSilentReplyText(pendingProtocol) || isTruncatedSilentReplyText(pendingProtocol)) {
           pendingProtocol = "";
           protocolResolved = true;
           return null;

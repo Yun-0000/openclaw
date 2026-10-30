@@ -55,7 +55,7 @@ page that now holds the content.
 - **Store vs transcript mismatch?** Confirm the Gateway host and the store path from `openclaw status`.
 - **Compaction spam?** Check the model's context window (too small forces frequent compaction) and tool-result bloat (tune session pruning).
 - **Every prompt seems to overflow on a small local model?** Confirm the provider reports the correct model context window. OpenClaw can cap the effective reserve only when that window is known.
-- **Silent turns leaking?** Confirm the entire completed final trims to uppercase `NO_REPLY`. Lowercase, punctuation, quotes, JSON, and trailing tokens are visible text. A literal leading `NO_REPLY\n` removes only that control line and delivers the remaining text; see [Silent housekeeping](/reference/session-management-compaction/housekeeping#silent-housekeeping-no_reply).
+- **Silent turns leaking?** Confirm the entire completed final trims to `NO_REPLY` in any letter case, or to a shorter prefix that still contains the underscore (`NO_R` and the other `NO_` prefixes). A bare `NO`, punctuation, quotes, JSON, and trailing tokens are visible text. A literal leading `NO_REPLY\n` removes only that control line and delivers the remaining text; see [Silent housekeeping](/reference/session-management-compaction/housekeeping#silent-housekeeping-no_reply).
 
 ## Related
 

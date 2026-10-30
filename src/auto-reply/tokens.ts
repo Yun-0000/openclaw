@@ -17,3 +17,15 @@ export function isInternalFormattingArtifact(text: string | undefined): boolean 
 export function isSilentReplyText(text?: string): boolean {
   return text?.trim().toUpperCase() === SILENT_REPLY_TOKEN;
 }
+
+/**
+ * A whole message that is a shortened `NO_REPLY` and still contains the underscore.
+ * `NO` stays visible so a short answer is not treated as silence.
+ */
+export function isTruncatedSilentReplyText(text?: string): boolean {
+  const normalized = text?.trim().toUpperCase();
+  if (!normalized || normalized.length < 3 || normalized.length >= SILENT_REPLY_TOKEN.length) {
+    return false;
+  }
+  return SILENT_REPLY_TOKEN.startsWith(normalized);
+}

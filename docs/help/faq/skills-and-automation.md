@@ -118,7 +118,7 @@ read_when:
     - `--no-deliver` / `delivery.mode: "none"`: no runner fallback send is expected.
     - Missing or invalid announce target (`channel` / `to`): the runner skipped outbound delivery.
     - Channel auth failures (`unauthorized`, `Forbidden`): the runner tried to deliver but credentials blocked it.
-    - A completed isolated final whose entire text trims to uppercase `NO_REPLY` is intentionally non-deliverable, so queued fallback delivery is also suppressed. Lowercase, wrapped forms, and trailing tokens remain visible.
+    - A completed isolated final whose entire text trims to `NO_REPLY` in any letter case, or to a shorter prefix that still contains the underscore (`NO_R` and the other `NO_` prefixes), is intentionally non-deliverable, so queued fallback delivery is also suppressed. A bare `NO`, wrapped forms, and trailing tokens remain visible.
 
     For isolated cron jobs, the agent can still send directly with the `message` tool when a chat route is available. `--announce` only controls runner fallback delivery for final text the agent did not already send itself.
 

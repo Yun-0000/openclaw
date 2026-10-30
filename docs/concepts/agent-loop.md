@@ -166,7 +166,7 @@ complete schema still enforces constraints such as `oneOf` exclusivity.
 
 Final payloads are assembled from assistant text (plus optional reasoning), inline tool summaries (when verbose and allowed), and assistant error text when the model errors.
 
-- Terminal producers recognize only a whole final that trims to uppercase `NO_REPLY`, record the terminal reply fact, and remove silent model text before delivery. Consumers forward prepared payloads without parsing the text again.
+- Terminal producers treat a whole final as silent when it trims to `NO_REPLY` in any letter case, or to a shorter prefix that still contains the underscore (`NO_`, `NO_R`, `NO_RE`, `NO_REP`, or `NO_REPL`). A bare `NO` stays visible. They record the terminal reply fact and remove silent model text before delivery. Consumers forward prepared payloads without parsing the text again.
 - Messaging tool duplicates are removed from the final payload list.
 - A confirmed final messaging-tool reply to the current source remains completion evidence across provider retries. Progress-only, failed, partial, dry-run, and other-destination sends do not satisfy that requirement. A newly accepted steered input needs its own answer.
 - A fallback tool error warning appears only when a run ends with a tool failure and would otherwise leave the user with no reply. This guard is not configurable; a user-facing reply, including one already delivered by a messaging tool, prevents the warning.

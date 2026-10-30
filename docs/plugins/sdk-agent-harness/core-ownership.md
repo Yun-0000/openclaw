@@ -414,12 +414,14 @@ providers/models inside a turn.
 
 Terminal reply preparation belongs to `agent-run-terminal-reply.ts`. Each terminal
 producer publishes `meta.terminalReply` and full prepared payloads; delivery and
-clients consume them without parsing text again. Only a whole final that trims
-to uppercase `NO_REPLY` is silent. Preparation strips one literal leading
+clients consume them without parsing text again. A whole final that trims
+to `NO_REPLY` in any letter case, or to a shorter prefix that still contains the
+underscore (`NO_`, `NO_R`, `NO_RE`, `NO_REP`, or `NO_REPL`), is silent. A bare
+`NO` stays visible. Preparation strips one literal leading
 `NO_REPLY\n` and preserves the remainder as visible text, including a second
 `NO_REPLY`. Otherwise, a standalone `NO_REPLY` on the last non-empty line is
 removed and the preceding answer is delivered; whitespace around that final line
-is allowed. Wrapped, lowercase, punctuated, inline, and mid-text forms remain visible.
+is allowed. Punctuated, quoted, inline, and mid-text forms remain visible.
 Internal result-required turns need an actual completed current-source final
 result; progress mirrors do not satisfy that obligation.
 

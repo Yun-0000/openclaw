@@ -4,7 +4,7 @@ import { stripHeartbeatToken } from "../auto-reply/heartbeat.js";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import { stripInternalMetadataForDisplay } from "../auto-reply/reply/display-text-sanitize.js";
 import { stripMixedSilentReplyTokens } from "../auto-reply/reply/mixed-silent-reply-tokens.js";
-import { isSilentReplyText } from "../auto-reply/tokens.js";
+import { isSilentReplyText, isTruncatedSilentReplyText } from "../auto-reply/tokens.js";
 import { normalizeAgentRunRouteChange } from "./agent-run-terminal-receipt.js";
 import type { AgentRunTerminalReplySnapshot } from "./agent-run-terminal-reply.types.js";
 
@@ -59,7 +59,7 @@ export function filterAgentRunTerminalPayloadsForPresentation(params: {
 
 /** Returns full prepared text, or undefined for an explicitly silent reply. */
 export function prepareAgentRunReplyText(rawText: string): string | undefined {
-  if (isSilentReplyText(rawText)) {
+  if (isSilentReplyText(rawText) || isTruncatedSilentReplyText(rawText)) {
     return undefined;
   }
   return stripMixedSilentReplyTokens(rawText) ?? rawText.replace(/[\r\n]\s*NO_REPLY\s*$/iu, "");

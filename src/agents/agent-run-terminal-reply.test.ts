@@ -67,6 +67,26 @@ describe("prepareAgentRunTerminalReply", () => {
     });
   });
 
+  it.each(["NO_R", "NO_", "NO_RE", "NO_REP", "NO_REPL", "  no_r\n"])(
+    "keeps a truncated whole-reply silent token %j silent",
+    (rawText) => {
+      expect(prepareAgentRunTerminalReply({ rawText })).toEqual({
+        text: "",
+        terminalReply: { disposition: "silent" },
+      });
+    },
+  );
+
+  it.each(["NO", "NO_X", "NO_R is not silence", "NOT A REPLY"])(
+    "keeps a non-token reply %j visible",
+    (rawText) => {
+      expect(prepareAgentRunTerminalReply({ rawText })).toEqual({
+        text: rawText,
+        terminalReply: { disposition: "visible", text: rawText },
+      });
+    },
+  );
+
   it("preserves UTF-16 text exactly when retaining terminal evidence", () => {
     const text = `Unicode 🦞 and a lone surrogate \ud800`;
     expect(prepareAgentRunTerminalReply({ rawText: text })).toEqual({

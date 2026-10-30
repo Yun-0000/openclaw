@@ -322,6 +322,19 @@ it("plans references for off/first/batched/all modes", () => {
   expect([existing.use(), existing.use()]).toEqual(["thread-1", undefined]);
 });
 
+it("does not emit a truncated whole-message silent token when the stream finishes", () => {
+  const truncated = createStreamingDirectiveAccumulator();
+  expect(truncated.consume("NO_R", { final: true })).toBeNull();
+
+  const answer = createStreamingDirectiveAccumulator();
+  expect(answer.consume("NO", { final: true })).toMatchObject({ text: "NO" });
+
+  const sentence = createStreamingDirectiveAccumulator();
+  expect(sentence.consume("NO_R stays in this sentence", { final: true })?.text).toContain(
+    "NO_R stays",
+  );
+});
+
 it("strips a malformed leading reply prefix without claiming reply intent", () => {
   const accumulator = createStreamingDirectiveAccumulator();
   expect(accumulator.consume("[[reply_to_")).toBeNull();

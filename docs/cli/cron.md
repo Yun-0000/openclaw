@@ -371,7 +371,7 @@ Isolated automation turns require a final deliverable rather than an interim sta
 
 ### Silent token suppression
 
-For text-only isolated automation announcements, only a completed final whose entire text trims to uppercase `NO_REPLY` suppresses direct outbound delivery and the fallback queued summary path. The terminal producer records this decision; delivery does not reparse the reply.
+For text-only isolated automation announcements, a completed final whose entire text trims to `NO_REPLY` in any letter case, or to a shorter prefix that still contains the underscore (`NO_`, `NO_R`, `NO_RE`, `NO_REP`, or `NO_REPL`), suppresses direct outbound delivery and the fallback queued summary path. A bare `NO` stays visible. The terminal producer records this decision; delivery does not reparse the reply.
 
 For example, this final reply sends no chat message:
 
@@ -379,7 +379,7 @@ For example, this final reply sends no chat message:
 NO_REPLY
 ```
 
-A literal leading `NO_REPLY\n` strips that one control line and delivers the rest unchanged. Lowercase `no_reply`, `NO_REPLY.`, quoted or JSON forms, and a trailing `NO_REPLY` after a report are visible text. For media payloads, silent model text can be removed while tool-owned media is still delivered.
+A literal leading `NO_REPLY\n` strips that one control line and delivers the rest unchanged. A bare `NO`, `NO_REPLY.`, quoted or JSON forms, and a trailing `NO_REPLY` after a report are visible text. A whole-message `no_reply` or `no_r` is silent. For media payloads, silent model text can be removed while tool-owned media is still delivered.
 
 Human-readable `automations list` and `automations show` label successful intentional suppression as `ok (suppressed)`, not a delivery warning. `automations show` includes `last delivery suppression` with the recorded reason (`empty`, `silent`, `heartbeat`, or `channel_transform`). JSON keeps `deliveryStatus: "not-delivered"` and the separate `deliverySuppressionReason`. Genuine delivery failures without an intentional reason still show `ok (not delivered)` when execution succeeded.
 
